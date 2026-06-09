@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+dist/
+dist-electron/
+
+# 二进制文件（体积较大，需单独下载）
+bin/win/ffmpeg.exe
+bin/win/yt-dlp.exe
+bin/mac/ffmpeg
+bin/mac/yt-dlp
+
+# 临时文件
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+*.swp
+*.swo
+*~
+
+# AI提示词
+AI_md

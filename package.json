@@ -1,0 +1,77 @@
+{
+  "name": "tyicc-midday-music",
+  "version": "1.0.0",
+  "description": "TYICC午间悦听 - 校园广播站智能音频工作流系统",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite & timeout /t 3 /nobreak >nul & npx electron src/main/main.js",
+    "dev:electron": "npx electron src/main/main.js",
+    "build": "vite build",
+    "preview": "vite preview",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac --x64"
+  },
+  "keywords": [
+    "broadcast",
+    "audio",
+    "bilibili",
+    "school"
+  ],
+  "author": "安舒阳",
+  "license": "MIT",
+  "type": "commonjs",
+  "build": {
+    "appId": "com.tyicc.midday-music",
+    "productName": "TYICC午间悦听",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/",
+        "to": "resources/",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "static/",
+        "to": "static/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "static/国际课程中心logo2.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "static/国际课程中心logo2.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.2",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2",
+    "vite": "^8.0.16",
+    "vite-plugin-electron": "^1.0.4",
+    "vite-plugin-electron-renderer": "^1.0.0"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.2.5",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "antd": "^6.4.3",
+    "fluent-ffmpeg": "^2.1.3",
+    "init": "^0.1.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  }
+}
