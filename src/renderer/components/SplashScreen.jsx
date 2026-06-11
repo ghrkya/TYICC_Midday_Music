@@ -24,7 +24,7 @@ export default function SplashScreen({ progress, status, networkOk }) {
         </div>
 
         {/* 标题 */}
-        <h1 className="splash-title">TYICC 午间悦听</h1>
+        <h1 className="splash-title">TYICC 午间悦听制作器</h1>
         <p className="splash-subtitle">M I D D A Y   M U S I C</p>
 
         {/* 加载进度条 */}

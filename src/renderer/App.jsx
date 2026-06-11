@@ -59,19 +59,14 @@ export default function App() {
         await sleep(200)
         await updateProgress(80)
 
-        // 阶段4: 下载yt-dlp（首次运行）
+        // 阶段4: 下载/更新yt-dlp
         setLoadingStatus('正在准备 yt-dlp 下载工具...')
         await updateProgress(88)
         if (window.electronAPI) {
           const dlResult = await window.electronAPI.downloadYtDlp()
           if (dlResult.success) {
             setLoadingStatus(dlResult.message || 'yt-dlp 已就绪')
-            // 尝试更新到最新版本
-            setTimeout(async () => {
-              try {
-                await window.electronAPI.updateYtDlp()
-              } catch {}
-            }, 100)
+            setYtdlpOk(true)
           } else {
             setLoadingStatus('⚠️ yt-dlp 下载失败，B站下载功能将不可用')
           }

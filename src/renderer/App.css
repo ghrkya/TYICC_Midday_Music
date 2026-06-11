@@ -191,6 +191,122 @@ body {
   gap: 12px;
 }
 
+/* 主内容区 — 工作区用 margin:auto 绝对居中，进度面板定位在其左侧 */
+.app-content-layout {
+  position: relative;
+  min-height: 200px;
+}
+
+/* 左侧工作进度面板 — 固定定位在工作区左侧 30px 处 */
+.progress-sidebar {
+  position: absolute;
+  left: calc(50% - 450px - 30px - 200px);  /* 工作区左边缘 - 30px gap - 200px 面板宽度 */
+  top: 0;
+  width: 200px;
+  flex-shrink: 0;
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 16px;
+}
+
+.progress-sidebar-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.progress-sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.progress-sidebar-item:hover {
+  background: rgba(108, 99, 255, 0.04);
+  border-color: var(--border-color);
+}
+
+.progress-sidebar-item.current {
+  background: rgba(108, 99, 255, 0.08);
+  border-color: var(--primary-light);
+}
+
+.progress-sidebar-item.done {
+  opacity: 1;
+}
+
+.progress-sidebar-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: rgba(108, 99, 255, 0.1);
+  color: var(--text-secondary);
+}
+
+.progress-sidebar-item.current .progress-sidebar-num {
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
+  color: #fff;
+}
+
+.progress-sidebar-item.done .progress-sidebar-num {
+  background: var(--secondary-color);
+  color: #fff;
+}
+
+.progress-sidebar-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.progress-sidebar-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.progress-sidebar-status {
+  font-size: 11px;
+  color: var(--text-light);
+  margin-top: 1px;
+}
+
+.progress-sidebar-item.current .progress-sidebar-status {
+  color: var(--primary-color);
+  font-weight: 500;
+}
+
+.progress-sidebar-footer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  font-weight: 600;
+}
+
 /* 长logo - 固定高度自适应宽度 */
 .app-header-logo {
   height: 36px;
@@ -234,8 +350,9 @@ body {
    工作流步骤容器
    ============================================ */
 .workflow-container {
+  width: 900px;
   max-width: 900px;
-  margin: 0 auto;
+  margin: 0 auto;   /* 绝对居中 */
   background: var(--card-bg);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
@@ -243,9 +360,82 @@ body {
 }
 
 .workflow-steps-bar {
-  padding: 20px 40px;
+  padding: 16px 24px;
   background: linear-gradient(135deg, #F8F7FF 0%, #F0F4FF 100%);
   border-bottom: 1px solid var(--border-color);
+}
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.step-indicator-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  color: var(--text-light);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.step-indicator-item:hover {
+  background: rgba(108, 99, 255, 0.06);
+  border-color: var(--primary-light);
+}
+
+.step-indicator-item.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
+  border-color: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(108, 99, 255, 0.25);
+  font-weight: 600;
+}
+
+.step-indicator-item.done {
+  color: var(--secondary-color);
+}
+
+.step-indicator-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(108, 99, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.step-indicator-item.active .step-indicator-num {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.step-indicator-label {
+  white-space: nowrap;
+}
+
+.step-indicator-check {
+  font-size: 11px;
+  color: var(--secondary-color);
+}
+
+.step-indicator-arrow {
+  color: var(--text-light);
+  font-size: 14px;
+  opacity: 0.5;
 }
 
 .workflow-content {
@@ -384,6 +574,74 @@ body {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* ============================================
+   每日歌曲 — 文件列表
+   ============================================ */
+.music-file-list {
+  margin-top: 16px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.music-file-list-header {
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: #FAFAFE;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.music-file-item {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.15s;
+}
+
+.music-file-item:last-child {
+  border-bottom: none;
+}
+
+.music-file-item:hover {
+  background: rgba(108, 99, 255, 0.03);
+}
+
+.music-file-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(108, 99, 255, 0.1);
+  color: var(--primary-color);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.music-file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.music-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.music-file-detail {
+  font-size: 11px;
+  color: var(--text-light);
+  margin-top: 1px;
 }
 
 /* 选项行 */

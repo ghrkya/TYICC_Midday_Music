@@ -1,16 +1,17 @@
 /**
  * TYICC午间悦听 - 工作流主组件
  * 
- * 五步工作流：
- * 1. 开头（开场白）
- * 2. 演讲（TED演讲）
- * 3. 转场（转场语）
- * 4. 每日歌曲
- * 5. 结语
+ * 六步工作流：
+ * 1. 片头
+ * 2. 开场语
+ * 3. 演讲（TED演讲）
+ * 4. 转场（转场语）
+ * 5. 每日歌曲
+ * 6. 结语
  */
 
-import React, { useState, useCallback } from 'react'
-import { Steps, Button, message } from 'antd'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
+import { Button, message } from 'antd'
 import {
   PlayCircleOutlined,
   SoundOutlined,
@@ -25,11 +26,18 @@ import ComposePanel from './ComposePanel'
 // 工作流步骤定义
 const STEPS = [
   {
-    title: '开场',
-    description: '统一录制的开场白',
+    title: '片头',
+    description: '统一的片头音频',
     key: 'opening',
     icon: <PlayCircleOutlined />,
-    defaultPreset: true // 可使用预设开场
+    defaultPreset: true // 可使用预设片头
+  },
+  {
+    title: '开场语',
+    description: '开场问候与介绍',
+    key: 'greeting',
+    icon: <SoundOutlined />,
+    defaultPreset: false
   },
   {
     title: '演讲',
@@ -63,8 +71,8 @@ const STEPS = [
 
 // 预设音频文件路径
 const PRESET_FILES = {
-  opening: null,    // 暂无预设开场文件
-  ending: null      // 暂无预设结语文件
+  opening: null,
+  ending: null
 }
 
 export default function Workflow({ networkOk, ffmpegOk }) {
@@ -74,9 +82,10 @@ export default function Workflow({ networkOk, ffmpegOk }) {
   // 每个步骤的音频文件信息
   const [stepFiles, setStepFiles] = useState({
     opening: null,
+    greeting: null,
     speech: null,
     transition: null,
-    music: null,      // 每日歌曲支持多个文件
+    music: [],        // 每日歌曲为文件列表
     ending: null
   })
 
@@ -109,14 +118,37 @@ export default function Workflow({ networkOk, ffmpegOk }) {
   /**
    * 使用预设音频
    */
-  const handleUsePreset = useCallback((stepKey) => {
+  const handleUsePreset = useCallback(async (stepKey) => {
+    if (stepKey === 'opening') {
+      if (!window.electronAPI) {
+        message.info('预设音频在浏览器预览中不可用')
+        return
+      }
+      try {
+        const result = await window.electronAPI.getPresetOpening()
+        if (result.success) {
+          setStepFile('opening', {
+            name: '广播站开头音频.MP3',
+            path: result.filePath,
+            source: 'preset',
+            size: result.size
+          })
+          message.success('已使用预设开场音频')
+        } else {
+          message.error('预设音频加载失败：' + (result.message || '文件不存在'))
+        }
+      } catch (err) {
+        message.error('加载预设音频出错：' + err.message)
+      }
+      return
+    }
     const preset = PRESET_FILES[stepKey]
     if (preset) {
       message.success('已使用预设音频')
     } else {
       message.info('暂无可用的预设音频，请选择本地文件或从B站下载')
     }
-  }, [])
+  }, [setStepFile])
 
   /**
    * 处理B站下载
@@ -150,11 +182,6 @@ export default function Workflow({ networkOk, ffmpegOk }) {
           bvId: bvId
         })
         message.success(`下载成功：${result.fileName}`)
-
-        // 如果开启了响度平衡，自动处理
-        if (loudnessEnabled && ffmpegOk) {
-          message.info('正在对下载的音频进行响度平衡...')
-        }
       } else {
         message.error(result.message || '下载失败')
       }
@@ -162,6 +189,96 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       message.error('下载出错：' + err.message)
     }
   }, [networkOk, loudnessEnabled, ffmpegOk, setStepFile])
+
+  /**
+   * 向音乐列表添加本地文件
+   */
+  const handleAddMusicFile = useCallback(async () => {
+    try {
+      if (!window.electronAPI) {
+        message.error('文件选择仅在桌面应用中可用')
+        return
+      }
+      const result = await window.electronAPI.openFileDialog()
+      if (!result.canceled && result.filePaths.length > 0) {
+        const filePath = result.filePaths[0]
+        const fileName = filePath.split(/[\\/]/).pop()
+        const fileInfo = await window.electronAPI.getFileInfo({ filePath })
+        setStepFiles(prev => ({
+          ...prev,
+          music: [...(prev.music || []), { name: fileName, path: filePath, source: 'local', size: fileInfo.size }]
+        }))
+        message.success(`已添加：${fileName}`)
+      }
+    } catch (err) {
+      message.error('添加文件出错：' + err.message)
+    }
+  }, [])
+
+  /**
+   * 为音乐列表从B站下载
+   */
+  const handleDownloadMusicBilibili = useCallback(async (bvId) => {
+    try {
+      if (!window.electronAPI) {
+        message.error('下载功能仅在桌面应用中可用')
+        return
+      }
+      if (!networkOk) {
+        message.warning('B站网络连接失败，下载可能无法进行')
+      }
+      const tempDir = await window.electronAPI.getTempDir()
+      const result = await window.electronAPI.downloadBilibili({
+        url: bvId,
+        outputDir: tempDir,
+        quality: 'best'
+      })
+      if (result.success) {
+        setStepFiles(prev => ({
+          ...prev,
+          music: [...(prev.music || []), { name: result.fileName, path: result.filePath, source: 'bilibili', bvId: bvId }]
+        }))
+        message.success(`下载成功：${result.fileName}`)
+      } else {
+        message.error(result.message || '下载失败')
+      }
+    } catch (err) {
+      message.error('下载出错：' + err.message)
+    }
+  }, [networkOk])
+
+  /**
+   * 从音乐列表移除文件
+   */
+  const handleRemoveMusicFile = useCallback((index) => {
+    setStepFiles(prev => ({
+      ...prev,
+      music: prev.music.filter((_, i) => i !== index)
+    }))
+  }, [])
+
+  /**
+   * 移动音乐列表中的歌曲位置
+   */
+  const handleMoveMusicFile = useCallback((index, direction) => {
+    setStepFiles(prev => {
+      const arr = [...(prev.music || [])]
+      const target = index + direction
+      if (target < 0 || target >= arr.length) return prev
+      ;[arr[index], arr[target]] = [arr[target], arr[index]]
+      return { ...prev, music: arr }
+    })
+  }, [])
+
+  // 片头自动加载预设（仅首次进入时）
+  const autoPresetTriggered = useRef(false)
+  useEffect(() => {
+    if (currentStep === 0 && !stepFiles.opening && !autoPresetTriggered.current) {
+      autoPresetTriggered.current = true
+      handleUsePreset('opening')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep, stepFiles.opening])
 
   /**
    * 处理本地文件选择
@@ -195,12 +312,18 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     }
   }, [setStepFile])
 
+  // 判断某步骤是否已完成
+  const isStepDone = (key) => {
+    const val = stepFiles[key]
+    if (key === 'music') return Array.isArray(val) && val.length > 0
+    return val !== null && val !== undefined
+  }
+
   /**
    * 检查是否可以进入下一步
    */
   const canGoNext = () => {
-    const file = stepFiles[currentKey]
-    return file !== null && file !== undefined
+    return isStepDone(currentKey)
   }
 
   /**
@@ -228,53 +351,79 @@ export default function Workflow({ networkOk, ffmpegOk }) {
         <div className="app-header-left">
           <img
             className="app-header-logo"
-            src="../static/国际课程中心logo2.png"
+            src="../static/国际课程中心logo2_裁切.png"
             alt="Logo"
-            onError={(e) => { e.target.src = '/static/国际课程中心logo2.png' }}
+            onError={(e) => { e.target.src = '/static/国际课程中心logo2_裁切.png' }}
           />
-          <span className="app-header-title">TYICC 午间悦听</span>
+          <span className="app-header-title">TYICC 午间悦听制作器</span>
         </div>
         <div className="app-header-right">
           {/* 可在此添加设置按钮等 */}
         </div>
       </div>
 
-      {/* 主内容区 */}
+      {/* 主内容区 — 左面板(进度) + 右面板(工作流) */}
       <div className="app-content">
-        <div className="workflow-container">
-          {/* 步骤导航条 */}
-          <div className="workflow-steps-bar">
-            <Steps
-              current={currentStep}
-              onChange={setCurrentStep}
-              size="small"
-            >
-              {STEPS.map((step, index) => (
-                <Steps.Step
-                  key={step.key}
-                  title={step.title}
-                  description={step.description}
-                  icon={step.icon}
-                  status={
-                    stepFiles[step.key]
-                      ? 'finish'
-                      : index < currentStep
-                        ? 'finish'
-                        : index === currentStep
-                          ? 'process'
-                          : 'wait'
-                  }
-                />
-              ))}
-            </Steps>
+        <div className="app-content-layout">
+          {/* 左侧工作进度面板 */}
+          <div className="progress-sidebar">
+            <div className="progress-sidebar-title">工作进度</div>
+            <div className="progress-sidebar-list">
+              {STEPS.map((step, index) => {
+                const hasFile = isStepDone(step.key)
+                const isCurrent = index === currentStep
+                return (
+                  <div
+                    key={step.key}
+                    className={`progress-sidebar-item ${isCurrent ? 'current' : ''} ${hasFile ? 'done' : ''}`}
+                    onClick={() => setCurrentStep(index)}
+                  >
+                    <div className="progress-sidebar-num">{index + 1}</div>
+                    <div className="progress-sidebar-info">
+                      <div className="progress-sidebar-label">{step.title}</div>
+                      <div className="progress-sidebar-status">
+                        {hasFile ? '✅ 已准备' : isCurrent ? '◀ 进行中' : '⏳ 待完成'}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="progress-sidebar-footer">
+              {STEPS.filter(s => isStepDone(s.key)).length} / {STEPS.length} 已完成
+            </div>
           </div>
 
-          {/* 当前步骤面板 */}
+          {/* 右侧工作流面板 */}
+          <div className="workflow-container">
+          {/* 章节指示器 — 可点击跳转 */}
+          <div className="workflow-steps-bar">
+            <div className="step-indicator">
+              {STEPS.map((step, index) => (
+                <React.Fragment key={step.key}>
+                  {index > 0 && <span className="step-indicator-arrow">→</span>}
+                  <span
+                    className={`step-indicator-item ${index === currentStep ? 'active' : ''} ${isStepDone(step.key) ? 'done' : ''}`}
+                    onClick={() => setCurrentStep(index)}
+                    title={`跳转到${step.title}`}
+                  >
+                    <span className="step-indicator-num">{index + 1}</span>
+                    <span className="step-indicator-label">{step.title}</span>
+                    {isStepDone(step.key) && <span className="step-indicator-check">✓</span>}
+                  </span>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+
+          {/* 当前步骤面板 — key 确保切换步骤时重新挂载，重置面板状态 */}
           <div className="workflow-content">
             <StepPanel
+              key={currentStep}
               step={STEPS[currentStep]}
               stepIndex={currentStep}
-              file={stepFiles[currentKey]}
+              file={currentKey === 'music' ? null : stepFiles[currentKey]}
+              musicFiles={currentKey === 'music' ? (stepFiles.music || []) : []}
               loudnessEnabled={loudnessEnabled}
               ffmpegOk={ffmpegOk}
               networkOk={networkOk}
@@ -283,6 +432,10 @@ export default function Workflow({ networkOk, ffmpegOk }) {
               onLocalFile={handleLocalFile}
               onBilibiliDownload={handleBilibiliDownload}
               onUsePreset={handleUsePreset}
+              onAddMusicFile={handleAddMusicFile}
+              onDownloadMusicBilibili={handleDownloadMusicBilibili}
+              onRemoveMusicFile={handleRemoveMusicFile}
+              onMoveMusicFile={handleMoveMusicFile}
             />
 
             {/* 全局选项 */}
@@ -327,10 +480,11 @@ export default function Workflow({ networkOk, ffmpegOk }) {
                   />
                 )}
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
+            </div>  {/* step-navigation */}
+          </div>  {/* workflow-content */}
+        </div>  {/* workflow-container */}
+        </div>  {/* app-content-layout */}
+      </div>  {/* app-content */}
     </>
   )
 }

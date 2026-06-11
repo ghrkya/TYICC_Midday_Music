@@ -17,6 +17,7 @@ const ipcMain = electron.ipcMain
 const dialog = electron.dialog
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 const crypto = require('crypto')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -41,12 +42,24 @@ const isDev = !app.isPackaged
 const isWin = process.platform === 'win32'
 const isMac = process.platform === 'darwin'
 
-// 用户数据目录结构（自动跨平台）
-const USER_DATA_DIR = app.getPath('userData')
-const USER_BIN_DIR = path.join(USER_DATA_DIR, 'bin')     // 存放yt-dlp
-const TEMP_DIR = path.join(USER_DATA_DIR, 'temp')        // 临时处理文件
-const DOWNLOAD_DIR = path.join(app.getAppPath(), 'ttmpdownload')  // 下载输出目录
-const CACHE_DIR = path.join(USER_DATA_DIR, 'cache')      // B站下载缓存
+// 所有本地数据全部存放在安装路径内，不污染系统用户文件夹
+const DATA_DIR = path.join(app.getAppPath(), 'usrdata')          // 应用本地数据根目录
+const BIN_DIR = path.join(DATA_DIR, 'bin')                       // 存放yt-dlp
+const TEMP_DIR = path.join(DATA_DIR, 'temp')                     // 临时处理文件
+const DOWNLOAD_DIR = path.join(app.getAppPath(), 'ttmpdownload') // 下载输出目录
+const CACHE_DIR = path.join(DATA_DIR, 'cache')                   // B站下载缓存
+
+// 应用启动前就重定向 Electron 存储路径，避免 Chromium 在 Roaming 写缓存
+const ELECTRON_DATA_DIR = path.join(app.getAppPath(), 'usrdata', 'electron')
+try {
+  if (!fs.existsSync(ELECTRON_DATA_DIR)) {
+    fs.mkdirSync(ELECTRON_DATA_DIR, { recursive: true })
+  }
+  app.setPath('userData', ELECTRON_DATA_DIR)
+  app.setPath('cache', path.join(ELECTRON_DATA_DIR, 'Cache'))
+} catch (e) {
+  console.warn('重定向 Electron 数据目录失败:', e.message)
+}
 
 let mainWindow = null
 
@@ -73,7 +86,7 @@ function getYtDlpPath() {
     }
   } catch {}
   // 回退到用户数据目录
-  return path.join(USER_BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp')
+  return path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp')
 }
 
 /**
@@ -82,6 +95,27 @@ function getYtDlpPath() {
 function getStaticPath(filename) {
   return path.join(__dirname, '../../static', filename)
 }
+
+/**
+ * 获取预设开场音频
+ */
+ipcMain.handle('get-preset-opening', async () => {
+  const presetPath = path.join(app.getAppPath(), 'static', '广播站开头音频.MP3')
+  try {
+    if (fs.existsSync(presetPath)) {
+      const stat = fs.statSync(presetPath)
+      return {
+        success: true,
+        filePath: presetPath,
+        size: stat.size,
+        fileName: '广播站开头音频.MP3'
+      }
+    }
+    return { success: false, message: '预设文件不存在: ' + presetPath }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
 
 /**
  * 确保目录存在
@@ -102,7 +136,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     frame: true,
-    title: 'TYICC午间悦听',
+    title: 'TYICC午间悦听制作器',
+    icon: path.join(app.getAppPath(), 'static', '国际课程中心logo2_裁切.png'),
     webPreferences: {
       // app.getAppPath() 始终返回项目根目录，不受插件重启/__dirname变化影响
       // 指向源码 preload，在 dev 模式下与编译版本等效
@@ -148,18 +183,18 @@ ipcMain.handle('check-network', async () => {
 })
 
 /**
- * 自动下载yt-dlp到用户数据目录
- * 只在第一次运行时下载，后续启动时只做更新检查
+ * 自动下载yt-dlp到用户数据目录，并检查更新
  */
 ipcMain.handle('download-yt-dlp', async () => {
   const ytDlpPath = getYtDlpPath()
-  ensureDir(USER_BIN_DIR)
+  ensureDir(BIN_DIR)
 
-  // 如果已存在且文件大小>0，直接返回成功
+  // 如果已存在且文件大小>0，直接跳转到更新检查
   if (fs.existsSync(ytDlpPath)) {
     const stat = fs.statSync(ytDlpPath)
     if (stat.size > 0) {
-      return { success: true, message: 'yt-dlp 已存在', alreadyExists: true }
+      // 已有 yt-dlp，运行 -U 检查/应用更新
+      return await runYtDlpUpdate(ytDlpPath)
     }
     // 0字节文件，删除重下
     try { fs.unlinkSync(ytDlpPath) } catch {}
@@ -175,7 +210,7 @@ ipcMain.handle('download-yt-dlp', async () => {
 
   function attemptDownload(urlIndex) {
     if (urlIndex >= downloadUrls.length) {
-      return Promise.resolve({ success: false, message: '所有下载源均失败，请手动下载 yt-dlp.exe 放入 ' + USER_BIN_DIR })
+      return Promise.resolve({ success: false, message: '所有下载源均失败，请手动下载 yt-dlp.exe 放入 ' + BIN_DIR })
     }
 
     return new Promise((resolve) => {
@@ -241,35 +276,69 @@ ipcMain.handle('download-yt-dlp', async () => {
     })
   }
 
-  return attemptDownload(0)
+  return attemptDownload(0).then(async (dlResult) => {
+    if (dlResult.success) {
+      return await runYtDlpUpdate(ytDlpPath)
+    }
+    return dlResult
+  })
 })
 
 /**
- * 更新yt-dlp到最新版本
+ * 运行 yt-dlp -U 更新到最新版本，下载完成后也会自动调用
  */
-ipcMain.handle('update-yt-dlp', async () => {
-  const ytDlpPath = getYtDlpPath()
-
-  if (!fs.existsSync(ytDlpPath)) {
-    return { success: false, message: 'yt-dlp未下载，请先执行下载' }
-  }
-
+async function runYtDlpUpdate(ytDlpPath) {
   return new Promise((resolve) => {
-    // 不使用 shell: true 避免 DEP0190 警告和安全风险
-    // 直接传递参数数组，由 Node.js 处理转义
     const proc = spawn(ytDlpPath, ['-U'], { shell: false })
     let output = ''
     proc.stdout.on('data', (data) => { output += data.toString() })
     proc.stderr.on('data', (data) => { output += data.toString() })
     proc.on('close', (code) => {
+      const msg = output.trim() || 'yt-dlp 已是最新版本'
       resolve({
-        success: code === 0,
-        message: output.trim() || 'yt-dlp 已是最新版本',
-        code
+        success: true,
+        message: code === 0 ? 'yt-dlp 已更新到最新版本' : 'yt-dlp 已就绪（更新检查: ' + msg + '）',
+        updated: code === 0
       })
     })
     proc.on('error', (err) => {
-      resolve({ success: false, message: err.message })
+      resolve({ success: true, message: 'yt-dlp 已就绪（无法检查更新: ' + err.message + '）', updated: false })
+    })
+  })
+}
+
+/**
+ * 手动更新yt-dlp（保留独立IPC供菜单使用）
+ */
+ipcMain.handle('update-yt-dlp', async () => {
+  const ytDlpPath = getYtDlpPath()
+  if (!fs.existsSync(ytDlpPath)) {
+    return { success: false, message: 'yt-dlp未下载，请先执行下载' }
+  }
+  return runYtDlpUpdate(ytDlpPath)
+})
+
+/**
+ * 检查yt-dlp版本
+ */
+ipcMain.handle('check-yt-dlp', async () => {
+  const ytPath = getYtDlpPath()
+  if (!fs.existsSync(ytPath)) {
+    return { available: false, message: 'yt-dlp 未找到' }
+  }
+  return new Promise((resolve) => {
+    const proc = spawn(ytPath, ['--version'])
+    let output = ''
+    proc.stdout.on('data', (data) => { output += data.toString() })
+    proc.on('close', (code) => {
+      resolve({
+        available: code === 0,
+        version: output.trim(),
+        message: code === 0 ? 'yt-dlp可用' : 'yt-dlp执行失败'
+      })
+    })
+    proc.on('error', (err) => {
+      resolve({ available: false, message: err.message })
     })
   })
 })
@@ -750,18 +819,27 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
           return
         }
 
-        // 扫描 outputDir 中的 mp3 文件（yt-dlp 成功后直接查找）
+        // 扫描 outputDir 中的 mp3 文件，按修改时间取最新（避免旧文件残留导致返回错误文件）
         let files = []
         try { files = fs.readdirSync(outputDir) } catch {}
-        const mp3File = files.find(f => f.toLowerCase().endsWith('.mp3'))
+        const mp3Files = files
+          .filter(f => f.toLowerCase().endsWith('.mp3'))
+          .map(f => {
+            try { return { name: f, mtime: fs.statSync(path.join(outputDir, f)).mtimeMs } }
+            catch { return null }
+          })
+          .filter(Boolean)
+          .sort((a, b) => b.mtime - a.mtime)
 
-        if (mp3File) {
-          const fullPath = path.join(outputDir, mp3File)
+        const newest = mp3Files[0]
+
+        if (newest) {
+          const fullPath = path.join(outputDir, newest.name)
           resolve({
             success: true,
             message: '下载成功',
             filePath: fullPath,
-            fileName: mp3File
+            fileName: newest.name
           })
           return
         }
@@ -843,38 +921,41 @@ ipcMain.handle('convert-to-wav', async (event, { inputPath, outputPath }) => {
 ipcMain.handle('concatenate-audio', async (event, { fileList, outputPath }) => {
   const ffPath = getFfmpegPath()
   if (!ffPath) return { success: false, message: 'FFmpeg不可用' }
+  if (!fileList || fileList.length === 0) return { success: false, message: '文件列表为空' }
 
-  ensureDir(TEMP_DIR)
-  const concatFile = path.join(TEMP_DIR, `concat_${Date.now()}.txt`)
+  // 输出格式判断
+  const ext = path.extname(outputPath).toLowerCase()
+  const audioCodec = ext === '.wav' ? 'pcm_s16le' : 'libmp3lame'
+  const codecArgs = ext === '.wav'
+    ? ['-c:a', 'pcm_s16le']
+    : ['-c:a', 'libmp3lame', '-q:a', '2']
 
-  try {
-    const fileContent = fileList.map(f => `file '${f.replace(/'/g, "'\\''")}'`).join('\n')
-    fs.writeFileSync(concatFile, fileContent, 'utf-8')
+  // 构建 concat filter：遇到不同采样率/格式时自动重采样
+  const inputs = fileList.flatMap(f => ['-i', f])
+  const filterInputLabels = fileList.map((_, i) => `[${i}:a]`).join('')
+  const filterStr = `${filterInputLabels}concat=n=${fileList.length}:v=0:a=1[aout]`
 
-    return new Promise((resolve) => {
-      const proc = spawn(ffPath, [
-        '-f', 'concat', '-safe', '0', '-i', concatFile,
-        '-c', 'copy', '-y', outputPath
-      ])
+  return new Promise((resolve) => {
+    const proc = spawn(ffPath, [
+      ...inputs,
+      '-filter_complex', filterStr,
+      '-map', '[aout]',
+      ...codecArgs,
+      '-y', outputPath
+    ])
 
-      let errorMsg = ''
-      proc.stderr.on('data', (data) => { errorMsg += data.toString() })
-      proc.on('close', (code) => {
-        try { fs.unlinkSync(concatFile) } catch {}
-        resolve({
-          success: code === 0,
-          message: code === 0 ? '拼接完成' : errorMsg || '拼接失败'
-        })
-      })
-      proc.on('error', (err) => {
-        try { fs.unlinkSync(concatFile) } catch {}
-        resolve({ success: false, message: err.message })
+    let errorMsg = ''
+    proc.stderr.on('data', (data) => { errorMsg += data.toString() })
+    proc.on('close', (code) => {
+      resolve({
+        success: code === 0,
+        message: code === 0 ? '拼接完成' : errorMsg.slice(0, 500) || '拼接失败'
       })
     })
-  } catch (err) {
-    try { fs.unlinkSync(concatFile) } catch {}
-    return { success: false, message: err.message }
-  }
+    proc.on('error', (err) => {
+      resolve({ success: false, message: err.message })
+    })
+  })
 })
 
 /**
@@ -963,14 +1044,106 @@ ipcMain.handle('get-cache-dir', async () => {
   return CACHE_DIR
 })
 
+/**
+ * 保存录音文件到 usrdata/temp
+ */
+ipcMain.handle('save-recording-file', async (event, { buffer, ext }) => {
+  ensureDir(TEMP_DIR)
+  const now = new Date()
+  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+  const filename = `recording_${ts}.${ext || 'webm'}`
+  const filePath = path.join(TEMP_DIR, filename)
+  fs.writeFileSync(filePath, Buffer.from(buffer))
+  return { success: true, filePath, fileName: filename }
+})
+
+/**
+ * 读取音频文件为 ArrayBuffer，供渲染进程创建 Blob URL
+ */
+ipcMain.handle('read-audio-blob', async (event, { filePath }) => {
+  try {
+    if (!fs.existsSync(filePath)) return { success: false, message: '文件不存在' }
+    const ext = path.extname(filePath).toLowerCase().slice(1)
+    const mimeMap = { wav: 'audio/wav', mp3: 'audio/mpeg', webm: 'audio/webm', m4a: 'audio/mp4', ogg: 'audio/ogg' }
+    const mime = mimeMap[ext] || 'audio/wav'
+    const buf = fs.readFileSync(filePath)
+    return {
+      success: true,
+      dataBase64: buf.toString('base64'),
+      mime,
+      size: buf.length
+    }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
 // ============================================================
 // 应用生命周期
 // ============================================================
 
 app.whenReady().then(async () => {
+  // 旧 Roaming 路径（用于迁移）
+  const OLD_USER_DATA = path.join(os.homedir(), 'AppData', 'Roaming', 'tyicc-midday-music')
+
   ensureDir(TEMP_DIR)
   ensureDir(DOWNLOAD_DIR)
   ensureDir(CACHE_DIR)
+
+  // 清理 ttmpdownload 中超过1天的已下载文件
+  try {
+    if (fs.existsSync(DOWNLOAD_DIR)) {
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000
+      for (const f of fs.readdirSync(DOWNLOAD_DIR)) {
+        const fp = path.join(DOWNLOAD_DIR, f)
+        try {
+          if (fs.statSync(fp).isFile() && fs.statSync(fp).mtimeMs < oneDayAgo) {
+            fs.unlinkSync(fp)
+            console.log('[cleanup] 已清理过期下载文件:', f)
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn('[cleanup] 清理 ttmpdownload 失败:', e.message)
+  }
+
+  // 从旧 Roaming 路径迁移数据到新的安装路径
+  try {
+    const OLD_BASE = OLD_USER_DATA
+    const OLD_BIN = path.join(OLD_BASE, 'bin')
+    const OLD_TEMP = path.join(OLD_BASE, 'temp')
+    const OLD_CACHE = path.join(OLD_BASE, 'cache')
+
+    // 迁移 bin (yt-dlp)
+    if (fs.existsSync(OLD_BIN)) {
+      const binFiles = fs.readdirSync(OLD_BIN)
+      for (const f of binFiles) {
+        const src = path.join(OLD_BIN, f)
+        const dst = path.join(BIN_DIR, f)
+        if (fs.statSync(src).isFile() && !fs.existsSync(dst)) {
+          ensureDir(BIN_DIR)
+          fs.copyFileSync(src, dst)
+          if (!isWin) try { fs.chmodSync(dst, '755') } catch {}
+          console.log('[migrate] yt-dlp 已迁移到:', dst)
+        }
+      }
+    }
+    // 迁移 cache
+    if (fs.existsSync(OLD_CACHE)) {
+      const cacheFiles = fs.readdirSync(OLD_CACHE)
+      for (const f of cacheFiles) {
+        const src = path.join(OLD_CACHE, f)
+        const dst = path.join(CACHE_DIR, f)
+        if (fs.statSync(src).isFile() && !fs.existsSync(dst)) {
+          ensureDir(CACHE_DIR)
+          fs.copyFileSync(src, dst)
+        }
+      }
+    }
+  } catch (migrateErr) {
+    console.warn('[migrate] 数据迁移跳过（首次运行或旧目录不存在）:', migrateErr.message)
+  }
 
   createWindow()
 

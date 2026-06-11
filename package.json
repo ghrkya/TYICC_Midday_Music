@@ -46,11 +46,11 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "static/国际课程中心logo2.png"
+      "icon": "static/国际课程中心logo2_裁切.png"
     },
     "mac": {
       "target": "dmg",
-      "icon": "static/国际课程中心logo2.png"
+      "icon": "static/国际课程中心logo2_裁切.png"
     },
     "nsis": {
       "oneClick": false,

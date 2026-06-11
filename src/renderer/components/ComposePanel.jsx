@@ -17,7 +17,8 @@ import {
 
 // 工作流步骤顺序
 const COMPOSE_ORDER = [
-  { key: 'opening', label: '开场 - TYICC午间悦听' },
+  { key: 'opening', label: '片头' },
+  { key: 'greeting', label: '开场语' },
   { key: 'speech', label: '演讲 - TED演讲内容' },
   { key: 'transition', label: '转场 - 介绍语' },
   { key: 'music', label: '每日歌曲' },
@@ -34,7 +35,11 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
    * 检查所有步骤是否已准备就绪
    */
   const allStepsReady = () => {
-    return COMPOSE_ORDER.every(item => stepFiles[item.key] !== null)
+    return COMPOSE_ORDER.every(item => {
+      const val = stepFiles[item.key]
+      if (item.key === 'music') return Array.isArray(val) && val.length > 0
+      return val !== null && val !== undefined
+    })
   }
 
   /**
@@ -54,7 +59,7 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
       }
 
       const saveResult = await window.electronAPI.openSaveDialog({
-        defaultName: `午间悦听_${new Date().toLocaleDateString()}.mp3`,
+        defaultName: `TYICC午间悦听_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.mp3`,
         filters: [
           { name: '音频文件', extensions: ['mp3', 'wav'] }
         ]
@@ -72,11 +77,6 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
       // 阶段1: 收集文件
       setComposeProgress(5)
       const orderKeys = COMPOSE_ORDER.map(item => item.key)
-      const filePath = stepFiles[orderKeys[0]]?.path
-      
-      if (!filePath) {
-        throw new Error('未找到音频文件')
-      }
 
       // 获取临时目录
       const tempDir = await window.electronAPI.getTempDir()
@@ -85,20 +85,30 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
       setComposeProgress(15)
       let processedFiles = []
 
+      // 展平所有待合成的文件路径（音乐步骤允许多文件）
+      const collectFilePaths = () => {
+        const paths = []
+        for (const key of orderKeys) {
+          const val = stepFiles[key]
+          if (key === 'music' && Array.isArray(val)) {
+            for (const mf of val) {
+              if (mf && mf.path) paths.push(mf.path.replace(/\\/g, '/'))
+            }
+          } else if (val && val.path) {
+            paths.push(val.path.replace(/\\/g, '/'))
+          }
+        }
+        return paths
+      }
+
       if (loudnessEnabled && ffmpegOk) {
         setComposeStatus('正在对各个音频进行响度平衡...')
+        const allPaths = collectFilePaths()
 
-        for (let i = 0; i < orderKeys.length; i++) {
-          const key = orderKeys[i]
-          const file = stepFiles[key]
-          if (!file || !file.path) continue
+        for (let i = 0; i < allPaths.length; i++) {
+          const normalizedPath = allPaths[i]
+          setComposeProgress(15 + (i / allPaths.length) * 50)
 
-          setComposeProgress(15 + (i / orderKeys.length) * 50)
-
-          // 标准化文件路径
-          const normalizedPath = file.path.replace(/\\/g, '/')
-
-          // 执行响度标准化
           const normalizeResult = await window.electronAPI.normalizeLoudness({
             inputPath: normalizedPath,
             outputPath: `${tempDir}/normalized_${i}.wav`,
@@ -108,16 +118,13 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
           if (normalizeResult.success) {
             processedFiles.push(`${tempDir}/normalized_${i}.wav`)
           } else {
-            // 如果响度平衡失败，使用原始文件
-            message.warning(`"${COMPOSE_ORDER[i].label}" 响度平衡失败，使用原始文件`)
+            message.warning(`第 ${i + 1} 段响度平衡失败，使用原始文件`)
             processedFiles.push(normalizedPath)
           }
         }
       } else {
         // 不使用响度平衡，直接拼接
-        processedFiles = orderKeys
-          .filter(key => stepFiles[key] && stepFiles[key].path)
-          .map(key => stepFiles[key].path.replace(/\\/g, '/'))
+        processedFiles = collectFilePaths()
       }
 
       // 阶段3: 拼接音频
@@ -166,19 +173,24 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
   }
 
   // 检查哪些步骤缺少文件
-  const missingSteps = COMPOSE_ORDER.filter(item => !stepFiles[item.key])
+  const missingSteps = COMPOSE_ORDER.filter(item => {
+    const val = stepFiles[item.key]
+    if (item.key === 'music') return !Array.isArray(val) || val.length === 0
+    return !val
+  })
 
   return (
     <div className="compose-section">
       <div className="compose-title">
         <PlayCircleOutlined style={{ marginRight: 8 }} />
-        合成完整节目
+        工作进度
       </div>
 
       {/* 合成预览 - 显示各段落的准备情况 */}
       <div className="compose-preview">
         {COMPOSE_ORDER.map((item, index) => {
-          const hasFile = stepFiles[item.key] !== null
+          const val = stepFiles[item.key]
+          const hasFile = item.key === 'music' ? (Array.isArray(val) && val.length > 0) : !!val
           return (
             <div
               key={item.key}

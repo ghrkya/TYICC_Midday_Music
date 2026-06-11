@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ========== yt-dlp管理 ==========
   downloadYtDlp: () => ipcRenderer.invoke('download-yt-dlp'),
   updateYtDlp: () => ipcRenderer.invoke('update-yt-dlp'),
+  checkYtDlp: () => ipcRenderer.invoke('check-yt-dlp'),
 
   // ========== FFmpeg管理 ==========
   checkFfmpeg: () => ipcRenderer.invoke('check-ffmpeg'),
@@ -36,5 +37,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getFileInfo: (options) => ipcRenderer.invoke('get-file-info', options),
   getTempDir: () => ipcRenderer.invoke('get-temp-dir'),
   getCacheDir: () => ipcRenderer.invoke('get-cache-dir'),
-  cleanupCache: () => ipcRenderer.invoke('cleanup-cache')
+  cleanupCache: () => ipcRenderer.invoke('cleanup-cache'),
+
+  // ========== 预设音频 ==========
+  getPresetOpening: () => ipcRenderer.invoke('get-preset-opening'),
+
+  // ========== 录音 ==========
+  saveRecordingFile: (options) => ipcRenderer.invoke('save-recording-file', options),
+  readAudioBlob: (options) => ipcRenderer.invoke('read-audio-blob', options)
 })
