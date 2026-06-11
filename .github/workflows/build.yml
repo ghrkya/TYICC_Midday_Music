@@ -8,6 +8,8 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -21,11 +23,10 @@ jobs:
         run: npm run build
 
       - name: Build Windows installer
-        run: npx electron-builder --win --x64
+        run: npx electron-builder --win --x64 --publish never
         env:
-          CI: "true"
+          CI: "false"
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          CSC_LINK: ""
 
       - uses: actions/upload-artifact@v4
         with:
@@ -34,6 +35,8 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -47,11 +50,10 @@ jobs:
         run: npm run build
 
       - name: Build macOS installer
-        run: npx electron-builder --mac --x64
+        run: npx electron-builder --mac --x64 --publish never
         env:
-          CI: "true"
+          CI: "false"
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          CSC_LINK: ""
 
       - uses: actions/upload-artifact@v4
         with:
