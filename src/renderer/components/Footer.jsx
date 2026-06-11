@@ -7,12 +7,17 @@
 import React, { useState, useEffect } from 'react'
 
 export default function Footer() {
+  const [appVer, setAppVer] = useState('1.0.0')
   const [ytdlpVer, setYtdlpVer] = useState('XX.XX')
   const [ffmpegVer, setFfmpegVer] = useState('XX.XX')
 
   useEffect(() => {
     async function loadVersions() {
       if (!window.electronAPI) return
+      try {
+        const v = await window.electronAPI.getAppVersion()
+        if (v.success && v.version) setAppVer(v.version)
+      } catch {}
       try {
         const yt = await window.electronAPI.checkYtDlp()
         if (yt.available && yt.version) {
@@ -31,7 +36,7 @@ export default function Footer() {
 
   return (
     <div className="app-footer">
-      2027届3班安舒阳 © 2026 | ver1.0 yt-dlp {ytdlpVer} ffmpeg {ffmpegVer}
+      2027届3班安舒阳 © 2026 | ver{appVer} yt-dlp {ytdlpVer} ffmpeg {ffmpegVer}
     </div>
   )
 }

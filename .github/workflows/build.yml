@@ -1,0 +1,53 @@
+name: Build Installers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Build Windows installer
+        run: npx electron-builder --win --x64
+        env:
+          CI: "true"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_LINK: ""
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TYICC-Midday-Music-Windows
+          path: dist/*.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Build macOS installer
+        run: npx electron-builder --mac --x64
+        env:
+          CI: "true"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_LINK: ""
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TYICC-Midday-Music-macOS
+          path: dist/*.dmg

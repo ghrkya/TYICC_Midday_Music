@@ -89,6 +89,9 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     ending: null
   })
 
+  // 被跳过的步骤（跳过时该步骤不参与合成）
+  const [skippedSteps, setSkippedSteps] = useState(new Set())
+
   // 响度平衡开关
   const [loudnessEnabled, setLoudnessEnabled] = useState(true)
 
@@ -312,8 +315,9 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     }
   }, [setStepFile])
 
-  // 判断某步骤是否已完成
+  // 判断某步骤是否已完成（有文件或被跳过）
   const isStepDone = (key) => {
+    if (skippedSteps.has(key)) return true
     const val = stepFiles[key]
     if (key === 'music') return Array.isArray(val) && val.length > 0
     return val !== null && val !== undefined
@@ -325,6 +329,27 @@ export default function Workflow({ networkOk, ffmpegOk }) {
   const canGoNext = () => {
     return isStepDone(currentKey)
   }
+
+  /**
+   * 跳过当前步骤
+   */
+  const handleSkipStep = useCallback((stepKey) => {
+    setSkippedSteps(prev => new Set([...prev, stepKey]))
+    if (stepKey === currentKey && currentStep < STEPS.length - 1) {
+      setCurrentStep(prev => prev + 1)
+    }
+  }, [currentKey, currentStep])
+
+  /**
+   * 取消跳过某步骤
+   */
+  const handleUnskipStep = useCallback((stepKey) => {
+    setSkippedSteps(prev => {
+      const next = new Set(prev)
+      next.delete(stepKey)
+      return next
+    })
+  }, [])
 
   /**
    * 下一步
@@ -382,7 +407,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
                     <div className="progress-sidebar-info">
                       <div className="progress-sidebar-label">{step.title}</div>
                       <div className="progress-sidebar-status">
-                        {hasFile ? '✅ 已准备' : isCurrent ? '◀ 进行中' : '⏳ 待完成'}
+                        {skippedSteps.has(step.key) ? '⏭️ 已跳过' : hasFile ? '✅ 已准备' : isCurrent ? '◀ 进行中' : '⏳ 待完成'}
                       </div>
                     </div>
                   </div>
@@ -403,13 +428,14 @@ export default function Workflow({ networkOk, ffmpegOk }) {
                 <React.Fragment key={step.key}>
                   {index > 0 && <span className="step-indicator-arrow">→</span>}
                   <span
-                    className={`step-indicator-item ${index === currentStep ? 'active' : ''} ${isStepDone(step.key) ? 'done' : ''}`}
+                    className={`step-indicator-item ${index === currentStep ? 'active' : ''} ${isStepDone(step.key) ? 'done' : ''} ${skippedSteps.has(step.key) ? 'skipped' : ''}`}
                     onClick={() => setCurrentStep(index)}
                     title={`跳转到${step.title}`}
                   >
                     <span className="step-indicator-num">{index + 1}</span>
                     <span className="step-indicator-label">{step.title}</span>
-                    {isStepDone(step.key) && <span className="step-indicator-check">✓</span>}
+                    {isStepDone(step.key) && !skippedSteps.has(step.key) && <span className="step-indicator-check">✓</span>}
+                    {skippedSteps.has(step.key) && <span className="step-indicator-check" style={{ color: '#FAAD14' }}>⏭</span>}
                   </span>
                 </React.Fragment>
               ))}
@@ -424,6 +450,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
               stepIndex={currentStep}
               file={currentKey === 'music' ? null : stepFiles[currentKey]}
               musicFiles={currentKey === 'music' ? (stepFiles.music || []) : []}
+              isSkipped={skippedSteps.has(currentKey)}
               loudnessEnabled={loudnessEnabled}
               ffmpegOk={ffmpegOk}
               networkOk={networkOk}
@@ -436,6 +463,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
               onDownloadMusicBilibili={handleDownloadMusicBilibili}
               onRemoveMusicFile={handleRemoveMusicFile}
               onMoveMusicFile={handleMoveMusicFile}
+              onUnskipStep={handleUnskipStep}
             />
 
             {/* 全局选项 */}
@@ -463,6 +491,13 @@ export default function Workflow({ networkOk, ffmpegOk }) {
                 )}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
+                {!skippedSteps.has(currentKey) && !(currentKey !== 'music' && stepFiles[currentKey]) && !(currentKey === 'music' && stepFiles.music?.length > 0) && (
+                  <Button
+                    onClick={() => handleSkipStep(currentKey)}
+                  >
+                    跳过
+                  </Button>
+                )}
                 {currentStep < STEPS.length - 1 ? (
                   <Button
                     type="primary"
@@ -475,6 +510,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
                 ) : (
                   <ComposePanel
                     stepFiles={stepFiles}
+                    skippedSteps={skippedSteps}
                     loudnessEnabled={loudnessEnabled}
                     ffmpegOk={ffmpegOk}
                   />

@@ -27,12 +27,27 @@ const https = require('https')
 // FFmpeg自动安装器 - npm包提供，跨平台兼容
 // ============================================================
 let ffmpegPath = null
-try {
-  const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg')
-  ffmpegPath = ffmpegInstaller.path
-  console.log('FFmpeg路径:', ffmpegPath)
-} catch (e) {
-  console.warn('FFmpeg包未找到:', e.message)
+
+function getFfmpegPath() {
+  if (ffmpegPath) return ffmpegPath
+
+  // 方式1：@ffmpeg-installer npm 包（dev 模式）
+  try {
+    const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg')
+    const p = ffmpegInstaller.path
+    if (p && fs.existsSync(p)) { ffmpegPath = p; return p }
+    // 打包后 asar 内的路径不可执行，替换为 asar.unpacked
+    if (p) {
+      const unpacked = p.replace('.asar\\', '.asar.unpacked\\').replace('.asar/', '.asar.unpacked/')
+      if (fs.existsSync(unpacked)) { ffmpegPath = unpacked; return unpacked }
+    }
+  } catch {}
+
+  // 方式2：直接从 asar.unpacked 目录查找（打包后 installdir 或者 win-unpacked）
+  const unpackedPath = path.join(process.resourcesPath || path.dirname(app.getPath('exe')), 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe')
+  try { if (fs.existsSync(unpackedPath)) { ffmpegPath = unpackedPath; return unpackedPath } } catch {}
+
+  return null
 }
 
 // ============================================================
@@ -43,14 +58,16 @@ const isWin = process.platform === 'win32'
 const isMac = process.platform === 'darwin'
 
 // 所有本地数据全部存放在安装路径内，不污染系统用户文件夹
-const DATA_DIR = path.join(app.getAppPath(), 'usrdata')          // 应用本地数据根目录
+// dev 模式用项目根目录，prod 模式用 exe 所在目录（asar 只读不可写入）
+const APP_DIR = isDev ? app.getAppPath() : path.dirname(app.getPath('exe'))
+const DATA_DIR = path.join(APP_DIR, 'usrdata')                   // 应用本地数据根目录
 const BIN_DIR = path.join(DATA_DIR, 'bin')                       // 存放yt-dlp
 const TEMP_DIR = path.join(DATA_DIR, 'temp')                     // 临时处理文件
-const DOWNLOAD_DIR = path.join(app.getAppPath(), 'ttmpdownload') // 下载输出目录
+const DOWNLOAD_DIR = path.join(APP_DIR, 'ttmpdownload')          // 下载输出目录
 const CACHE_DIR = path.join(DATA_DIR, 'cache')                   // B站下载缓存
 
 // 应用启动前就重定向 Electron 存储路径，避免 Chromium 在 Roaming 写缓存
-const ELECTRON_DATA_DIR = path.join(app.getAppPath(), 'usrdata', 'electron')
+const ELECTRON_DATA_DIR = path.join(APP_DIR, 'usrdata', 'electron')
 try {
   if (!fs.existsSync(ELECTRON_DATA_DIR)) {
     fs.mkdirSync(ELECTRON_DATA_DIR, { recursive: true })
@@ -64,25 +81,24 @@ try {
 let mainWindow = null
 
 /**
- * 获取FFmpeg路径
- * 由 npm 包 @ffmpeg-installer/ffmpeg 自动提供对应平台的二进制
- */
-function getFfmpegPath() {
-  return ffmpegPath
-}
-
-/**
  * 获取yt-dlp路径
  * 优先使用项目内打包的版本 (bin/)，回退到用户数据目录
  */
 function getYtDlpPath() {
-  // app.getAppPath() 始终返回项目根目录
+  // dev 模式：项目根目录 bin/
   const bundledPath = path.join(app.getAppPath(), 'bin', isWin ? 'win/yt-dlp.exe' : 'mac/yt-dlp_macos')
-  // 检查打包的yt-dlp是否存在且有效
   try {
     if (fs.existsSync(bundledPath)) {
       const stat = fs.statSync(bundledPath)
       if (stat.size > 1000) return bundledPath
+    }
+  } catch {}
+  // 打包后：resources/bin/ 中（extraResources 复制过去的）
+  try {
+    const resPath = path.join(process.resourcesPath, 'bin', isWin ? 'win/yt-dlp.exe' : 'mac/yt-dlp_macos')
+    if (fs.existsSync(resPath)) {
+      const stat = fs.statSync(resPath)
+      if (stat.size > 1000) return resPath
     }
   } catch {}
   // 回退到用户数据目录
@@ -100,21 +116,26 @@ function getStaticPath(filename) {
  * 获取预设开场音频
  */
 ipcMain.handle('get-preset-opening', async () => {
-  const presetPath = path.join(app.getAppPath(), 'static', '广播站开头音频.MP3')
-  try {
-    if (fs.existsSync(presetPath)) {
-      const stat = fs.statSync(presetPath)
-      return {
-        success: true,
-        filePath: presetPath,
-        size: stat.size,
-        fileName: '广播站开头音频.MP3'
+  // 优先外部文件系统路径（FFmpeg 等外部工具无法读取 asar 内文件）
+  const candidates = [
+    path.join(process.resourcesPath || '', 'static', '广播站开头音频.MP3'),
+    path.join(app.getAppPath(), 'static', '广播站开头音频.MP3'),
+    path.join(__dirname, '../../static/广播站开头音频.MP3')
+  ]
+  for (const presetPath of candidates) {
+    try {
+      if (presetPath && fs.existsSync(presetPath)) {
+        const stat = fs.statSync(presetPath)
+        return {
+          success: true,
+          filePath: presetPath,
+          size: stat.size,
+          fileName: '广播站开头音频.MP3'
+        }
       }
-    }
-    return { success: false, message: '预设文件不存在: ' + presetPath }
-  } catch (err) {
-    return { success: false, message: err.message }
+    } catch {}
   }
+  return { success: false, message: '预设文件不存在' }
 })
 
 /**
@@ -130,6 +151,9 @@ function ensureDir(dirPath) {
  * 创建主窗口
  */
 function createWindow() {
+  // 移除默认菜单栏（File/Edit/View 等）
+  electron.Menu.setApplicationMenu(null)
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -137,11 +161,10 @@ function createWindow() {
     minHeight: 600,
     frame: true,
     title: 'TYICC午间悦听制作器',
-    icon: path.join(app.getAppPath(), 'static', '国际课程中心logo2_裁切.png'),
+    icon: path.join(__dirname, '../../static/国际课程中心logo2_裁切.png'),
     webPreferences: {
-      // app.getAppPath() 始终返回项目根目录，不受插件重启/__dirname变化影响
-      // 指向源码 preload，在 dev 模式下与编译版本等效
-      preload: path.join(app.getAppPath(), 'src', 'preload', 'index.js'),
+      // 编译后 preload 在 dist-electron/ 下，用 __dirname 同时兼容 dev / prod
+      preload: path.join(__dirname, 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false
@@ -158,7 +181,7 @@ function createWindow() {
     mainWindow.loadURL(url)
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'))
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
   mainWindow.on('closed', () => {
@@ -880,7 +903,7 @@ ipcMain.handle('normalize-loudness', async (event, { inputPath, outputPath, targ
     proc.on('close', (code) => {
       resolve({
         success: code === 0,
-        message: code === 0 ? '响度标准化完成' : '处理失败'
+        message: code === 0 ? '响度标准化完成' : (errorMsg || '').split('\n').slice(-3).join('\n') || '处理失败'
       })
     })
     proc.on('error', (err) => {
@@ -949,7 +972,7 @@ ipcMain.handle('concatenate-audio', async (event, { fileList, outputPath }) => {
     proc.on('close', (code) => {
       resolve({
         success: code === 0,
-        message: code === 0 ? '拼接完成' : errorMsg.slice(0, 500) || '拼接失败'
+        message: code === 0 ? '拼接完成' : (errorMsg || '').split('\n').slice(-5).join('\n') || '拼接失败'
       })
     })
     proc.on('error', (err) => {
@@ -1073,6 +1096,32 @@ ipcMain.handle('read-audio-blob', async (event, { filePath }) => {
       mime,
       size: buf.length
     }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+/**
+ * 返回应用版本号（从 package.json 读取）
+ */
+ipcMain.handle('get-app-version', async () => {
+  try {
+    return { success: true, version: app.getVersion() }
+  } catch {
+    return { success: true, version: '1.0.0' }
+  }
+})
+
+/**
+ * 在文件管理器中打开目标位置并选中文件
+ */
+ipcMain.handle('open-file-location', async (event, { filePath }) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return { success: false, message: '文件不存在' }
+    }
+    electron.shell.showItemInFolder(filePath)
+    return { success: true }
   } catch (err) {
     return { success: false, message: err.message }
   }

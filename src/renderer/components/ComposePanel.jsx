@@ -25,17 +25,18 @@ const COMPOSE_ORDER = [
   { key: 'ending', label: '结语' }
 ]
 
-export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
+export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled, ffmpegOk }) {
   const [composing, setComposing] = useState(false)
   const [composeProgress, setComposeProgress] = useState(0)
   const [composeStatus, setComposeStatus] = useState('idle') // idle | processing | done | error
   const [outputPath, setOutputPath] = useState('')
 
   /**
-   * 检查所有步骤是否已准备就绪
+   * 检查所有步骤是否已准备就绪（被跳过的也算就绪）
    */
   const allStepsReady = () => {
     return COMPOSE_ORDER.every(item => {
+      if (skippedSteps && skippedSteps.has(item.key)) return true
       const val = stepFiles[item.key]
       if (item.key === 'music') return Array.isArray(val) && val.length > 0
       return val !== null && val !== undefined
@@ -85,10 +86,11 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
       setComposeProgress(15)
       let processedFiles = []
 
-      // 展平所有待合成的文件路径（音乐步骤允许多文件）
+      // 展平所有待合成的文件路径（跳过被跳过的步骤）
       const collectFilePaths = () => {
         const paths = []
         for (const key of orderKeys) {
+          if (skippedSteps && skippedSteps.has(key)) continue
           const val = stepFiles[key]
           if (key === 'music' && Array.isArray(val)) {
             for (const mf of val) {
@@ -139,6 +141,10 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
       if (concatResult.success) {
         setComposeProgress(100)
         setComposeStatus('done')
+        // 自动打开输出文件所在文件夹
+        if (window.electronAPI && saveResult.filePath) {
+          window.electronAPI.openFileLocation({ filePath: saveResult.filePath }).catch(() => {})
+        }
         message.success('合成完成！')
       } else {
         throw new Error(concatResult.message || '合成失败')
@@ -156,6 +162,9 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
    * 弹出合成结果消息
    */
   const showResult = () => {
+    if (window.electronAPI && outputPath) {
+      window.electronAPI.openFileLocation({ filePath: outputPath }).catch(() => {})
+    }
     Modal.success({
       title: '合成完成',
       content: (
@@ -172,8 +181,9 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
     })
   }
 
-  // 检查哪些步骤缺少文件
+  // 检查哪些步骤缺少文件（排除已跳过的）
   const missingSteps = COMPOSE_ORDER.filter(item => {
+    if (skippedSteps && skippedSteps.has(item.key)) return false
     const val = stepFiles[item.key]
     if (item.key === 'music') return !Array.isArray(val) || val.length === 0
     return !val
@@ -190,19 +200,22 @@ export default function ComposePanel({ stepFiles, loudnessEnabled, ffmpegOk }) {
       <div className="compose-preview">
         {COMPOSE_ORDER.map((item, index) => {
           const val = stepFiles[item.key]
-          const hasFile = item.key === 'music' ? (Array.isArray(val) && val.length > 0) : !!val
+          const isSkippedVal = skippedSteps && skippedSteps.has(item.key)
+          const hasFile = isSkippedVal || (item.key === 'music' ? (Array.isArray(val) && val.length > 0) : !!val)
           return (
             <div
               key={item.key}
               className={`compose-item ${hasFile ? 'active' : ''}`}
               style={{
                 opacity: hasFile ? 1 : 0.5,
-                borderLeft: `3px solid ${hasFile ? '#6C63FF' : '#E8E8F0'}`
+                borderLeft: `3px solid ${isSkippedVal ? '#FAAD14' : hasFile ? '#6C63FF' : '#E8E8F0'}`
               }}
             >
               <span>{index + 1}.</span>
               <span style={{ flex: 1 }}>{item.label}</span>
-              {hasFile ? (
+              {isSkippedVal ? (
+                <span style={{ color: '#FAAD14', fontSize: 12 }}>⏭️ 已跳过</span>
+              ) : hasFile ? (
                 <span style={{ color: '#52C41A', fontSize: 12 }}>
                   ✅ 已准备
                 </span>

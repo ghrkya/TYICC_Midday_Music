@@ -44,5 +44,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ========== 录音 ==========
   saveRecordingFile: (options) => ipcRenderer.invoke('save-recording-file', options),
-  readAudioBlob: (options) => ipcRenderer.invoke('read-audio-blob', options)
+  readAudioBlob: (options) => ipcRenderer.invoke('read-audio-blob', options),
+
+  // ========== 应用信息 ==========
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  openFileLocation: (options) => ipcRenderer.invoke('open-file-location', options)
 })

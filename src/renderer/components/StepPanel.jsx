@@ -84,7 +84,9 @@ export default function StepPanel({
   onAddMusicFile,
   onDownloadMusicBilibili,
   onRemoveMusicFile,
-  onMoveMusicFile
+  onMoveMusicFile,
+  isSkipped,
+  onUnskipStep
 }) {
   // 显示B站下载面板
   const [showBilibili, setShowBilibili] = React.useState(false)
@@ -226,6 +228,28 @@ export default function StepPanel({
           <div className="step-description">{getStepDescription()}</div>
         </div>
       </div>
+
+      {/* 跳过状态提示 */}
+      {isSkipped && (
+        <div style={{
+          padding: '14px 16px',
+          background: '#FFFBE6',
+          border: '1px solid #FFE58F',
+          borderRadius: 8,
+          marginBottom: 14,
+          fontSize: 13,
+          color: '#AD6800',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8
+        }}>
+          <span>⏭️ 已跳过本步骤，可以点击上方按钮取消跳过</span>
+          <Button size="small" onClick={() => onUnskipStep(step.key)}>
+            取消跳过
+          </Button>
+        </div>
+      )}
 
       {/* 操作按钮 */}
       <div className="action-group">

@@ -1,6 +1,6 @@
 {
   "name": "tyicc-midday-music",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TYICC午间悦听 - 校园广播站智能音频工作流系统",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -8,8 +8,8 @@
     "dev:electron": "npx electron src/main/main.js",
     "build": "vite build",
     "preview": "vite preview",
-    "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac --x64"
+    "dist:win": "set HTTP_PROXY=&& set http_proxy=&& set HTTPS_PROXY=&& set https_proxy=&& electron-builder --win --x64",
+    "dist:mac": "set HTTP_PROXY=&& set http_proxy=&& electron-builder --mac --x64"
   },
   "keywords": [
     "broadcast",
@@ -26,6 +26,7 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "static/**/*",
       "node_modules/**/*"
     ],
     "extraResources": [
@@ -42,6 +43,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "bin/",
+        "to": "bin/",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
@@ -54,6 +62,7 @@
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true
     }
   },
