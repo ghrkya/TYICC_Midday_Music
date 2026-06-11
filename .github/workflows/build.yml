@@ -13,9 +13,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - run: npm ci
+
+      - name: Build frontend + Electron
+        run: npm run build
 
       - name: Build Windows installer
         run: npx electron-builder --win --x64
@@ -36,9 +39,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - run: npm ci
+
+      - name: Build frontend + Electron
+        run: npm run build
 
       - name: Build macOS installer
         run: npx electron-builder --mac --x64
