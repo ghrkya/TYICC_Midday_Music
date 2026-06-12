@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react'
-import { message } from 'antd'
+import { message, Modal } from 'antd'
 import SplashScreen from './components/SplashScreen'
 import Workflow from './components/Workflow'
 import Footer from './components/Footer'
@@ -60,16 +60,11 @@ export default function App() {
         await updateProgress(80)
 
         // 阶段4: 下载/更新yt-dlp
-        setLoadingStatus('正在准备 yt-dlp 下载工具...')
-        await updateProgress(88)
+        setLoadingStatus('正在检测本地 yt-dlp...')
+        await updateProgress(84)
         if (window.electronAPI) {
-          const dlResult = await window.electronAPI.downloadYtDlp()
-          if (dlResult.success) {
-            setLoadingStatus(dlResult.message || 'yt-dlp 已就绪')
-            setYtdlpOk(true)
-          } else {
-            setLoadingStatus('⚠️ yt-dlp 下载失败，B站下载功能将不可用')
-          }
+          const ytdlpReady = await prepareYtDlpWithRetry()
+          setYtdlpOk(ytdlpReady)
         }
         await sleep(300)
 
@@ -98,6 +93,62 @@ export default function App() {
 
     initSequence()
   }, [])
+
+  async function prepareYtDlpWithRetry() {
+    let checkResult = { available: false }
+    try {
+      checkResult = await window.electronAPI.checkYtDlp()
+    } catch {}
+
+    if (checkResult && checkResult.available) {
+      const ver = checkResult.version ? ` (${checkResult.version})` : ''
+      setLoadingStatus(`已检测到 yt-dlp${ver}，正在检查更新...`)
+    } else {
+      setLoadingStatus('未检测到 yt-dlp，正在下载核心组件...')
+    }
+
+    await updateProgress(90)
+
+    while (true) {
+      const dlResult = await window.electronAPI.downloadYtDlp()
+
+      if (dlResult.success) {
+        setLoadingStatus(dlResult.message || 'yt-dlp 已就绪')
+        return true
+      }
+
+      if (dlResult.timedOut) {
+        const action = await new Promise((resolve) => {
+          Modal.confirm({
+            title: '重要组件更新遇到网络问题',
+            content: 'yt-dlp 更新/下载耗时过长，可能是网络不稳定或访问 GitHub 受限。是否重试？',
+            okText: '重试',
+            cancelText: '跳过',
+            centered: true,
+            onOk: () => resolve('retry'),
+            onCancel: () => resolve('skip')
+          })
+        })
+
+        if (action === 'retry') {
+          setLoadingStatus('正在重新尝试更新 yt-dlp...')
+          await sleep(300)
+          continue
+        }
+
+        if (checkResult && checkResult.available) {
+          setLoadingStatus('⚠️ yt-dlp 更新超时，已保留当前可用版本')
+          return true
+        }
+
+        setLoadingStatus('⚠️ yt-dlp 下载/更新被跳过，B站下载功能将不可用')
+        return false
+      }
+
+      setLoadingStatus('⚠️ yt-dlp 下载失败，B站下载功能将不可用')
+      return !!(checkResult && checkResult.available)
+    }
+  }
 
   // 更新进度条的辅助函数
   async function updateProgress(target) {

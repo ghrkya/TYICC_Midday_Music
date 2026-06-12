@@ -373,20 +373,34 @@ ipcMain.handle('download-yt-dlp', async () => {
  */
 async function runYtDlpUpdate(ytDlpPath) {
   return new Promise((resolve) => {
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      resolve(result)
+    }
+
     const proc = spawn(ytDlpPath, ['-U'], { shell: false })
     let output = ''
+
+    const timeoutId = setTimeout(() => {
+      try { proc.kill() } catch {}
+      finish({ success: true, message: 'yt-dlp 已就绪（更新检查超时，已跳过）', updated: false, timedOut: true })
+    }, 20000)
+
     proc.stdout.on('data', (data) => { output += data.toString() })
     proc.stderr.on('data', (data) => { output += data.toString() })
     proc.on('close', (code) => {
       const msg = output.trim() || 'yt-dlp 已是最新版本'
-      resolve({
+      finish({
         success: true,
         message: code === 0 ? 'yt-dlp 已更新到最新版本' : 'yt-dlp 已就绪（更新检查: ' + msg + '）',
         updated: code === 0
       })
     })
     proc.on('error', (err) => {
-      resolve({ success: true, message: 'yt-dlp 已就绪（无法检查更新: ' + err.message + '）', updated: false })
+      finish({ success: true, message: 'yt-dlp 已就绪（无法检查更新: ' + err.message + '）', updated: false })
     })
   })
 }
