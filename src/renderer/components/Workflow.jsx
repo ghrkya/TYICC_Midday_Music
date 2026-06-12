@@ -376,9 +376,14 @@ export default function Workflow({ networkOk, ffmpegOk }) {
         <div className="app-header-left">
           <img
             className="app-header-logo"
-            src="../static/国际课程中心logo2_裁切.png"
+            src="./static/国际课程中心logo2_裁切.png"
             alt="Logo"
-            onError={(e) => { e.target.src = '/static/国际课程中心logo2_裁切.png' }}
+            onError={(e) => {
+              if (!e.target.dataset.fallbackTried) {
+                e.target.dataset.fallbackTried = '1'
+                e.target.src = 'static/国际课程中心logo2_裁切.png'
+              }
+            }}
           />
           <span className="app-header-title">TYICC 午间悦听制作器</span>
         </div>

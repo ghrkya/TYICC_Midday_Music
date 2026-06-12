@@ -1,8 +1,8 @@
 /**
- * TYICC午间悦听 - 录音组件（AudioContext 直接编码 WAV）
+ * TYICC午间悦听 - 录音组件（Web Audio API + AudioWorklet）
  * 
- * 使用 Web Audio API 捕获原始 PCM 数据，手动编码为 WAV 文件。
- * 绕过 MediaRecorder 的编解码器兼容性问题，确保播放器能正常回放。
+ * 使用 AudioWorklet 捕获原始 PCM 数据并手动编码为 WAV 文件。
+ * 相比 ScriptProcessorNode，AudioWorklet 在现代浏览器/Electron 中更稳定。
  */
 
 import React, { useState, useRef, useEffect } from 'react'
@@ -20,10 +20,11 @@ export default function AudioRecorder({ onComplete, onCancel }) {
 
   const audioCtxRef = useRef(null)
   const sourceRef = useRef(null)
-  const processorRef = useRef(null)
+  const workletNodeRef = useRef(null)
   const monitorGainRef = useRef(null)
   const streamRef = useRef(null)
   const samplesRef = useRef([])
+  const sampleRateRef = useRef(48000)
   const timerRef = useRef(null)
 
   useEffect(() => {
@@ -52,9 +53,10 @@ export default function AudioRecorder({ onComplete, onCancel }) {
   }
 
   const stopRecordingInternal = () => {
-    if (processorRef.current) {
-      processorRef.current.disconnect()
-      processorRef.current = null
+    if (workletNodeRef.current) {
+      workletNodeRef.current.port.onmessage = null
+      workletNodeRef.current.disconnect()
+      workletNodeRef.current = null
     }
     if (monitorGainRef.current) {
       monitorGainRef.current.disconnect()
@@ -136,45 +138,43 @@ export default function AudioRecorder({ onComplete, onCancel }) {
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
       streamRef.current = stream
 
-      const audioCtx = new AudioContext()
+      const audioCtx = new AudioContext({ latencyHint: 'interactive' })
       audioCtxRef.current = audioCtx
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume()
       }
+      sampleRateRef.current = audioCtx.sampleRate
+
+      const workletUrl = new URL('./pcm-recorder.worklet.js', import.meta.url)
+      await audioCtx.audioWorklet.addModule(workletUrl)
 
       const source = audioCtx.createMediaStreamSource(stream)
       sourceRef.current = source
 
-      // ScriptProcessorNode 收集 PCM 数据
-      const processor = audioCtx.createScriptProcessor(4096, 2, 1)
-      processorRef.current = processor
+      const workletNode = new AudioWorkletNode(audioCtx, 'pcm-recorder-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: 'explicit'
+      })
+      workletNodeRef.current = workletNode
       samplesRef.current = []
 
-      processor.onaudioprocess = (e) => {
-        const inputBuffer = e.inputBuffer
-        const channels = inputBuffer.numberOfChannels
-        const frameLen = inputBuffer.length
-        if (channels <= 0 || frameLen <= 0) return
-
-        // mac 上某些设备可能只有右声道有信号，这里做多声道平均避免“有时长但无声”。
-        const mixed = new Float32Array(frameLen)
-        for (let ch = 0; ch < channels; ch++) {
-          const channelData = inputBuffer.getChannelData(ch)
-          for (let i = 0; i < frameLen; i++) {
-            mixed[i] += channelData[i]
-          }
+      workletNode.port.onmessage = (event) => {
+        const data = event.data
+        if (!data || data.type !== 'chunk' || !data.buffer) return
+        const chunk = new Float32Array(data.buffer)
+        if (chunk.length > 0) {
+          samplesRef.current.push(chunk)
         }
-        for (let i = 0; i < frameLen; i++) {
-          mixed[i] /= channels
-        }
-        samplesRef.current.push(mixed)
       }
 
-      source.connect(processor)
+      source.connect(workletNode)
       const monitorGain = audioCtx.createGain()
       monitorGain.gain.value = 0
       monitorGainRef.current = monitorGain
-      processor.connect(monitorGain)
+      workletNode.connect(monitorGain)
       monitorGain.connect(audioCtx.destination)
 
       setIsRecording(true)
@@ -199,7 +199,7 @@ export default function AudioRecorder({ onComplete, onCancel }) {
     if (!audioCtxRef.current) return
 
     const collectedSamples = samplesRef.current
-    const sampleRate = audioCtxRef.current.sampleRate
+    const sampleRate = sampleRateRef.current || 48000
 
     stopRecordingInternal()
     setIsRecording(false)
