@@ -1,5 +1,6 @@
 @echo off
-cd /d D:\Code\Github\TYICC_Midday_Music
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 set HTTP_PROXY=http://127.0.0.1:7897
 set http_proxy=http://127.0.0.1:7897
 set HTTPS_PROXY=http://127.0.0.1:7897

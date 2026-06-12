@@ -1,12 +1,12 @@
 {
   "name": "tyicc-midday-music",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "description": "TYICC午间悦听 - 校园广播站智能音频工作流系统",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite & timeout /t 3 /nobreak >nul & npx electron src/main/main.js",
     "dev:electron": "npx electron src/main/main.js",
-    "build": "vite build",
+    "build": "vite build && node -e \"require('fs').cpSync('static','dist/static',{recursive:true,force:true})\"",
     "preview": "vite preview",
     "dist:win": "set HTTP_PROXY=&& set http_proxy=&& set HTTPS_PROXY=&& set https_proxy=&& electron-builder --win --x64",
     "dist:mac": "set HTTP_PROXY=&& set http_proxy=&& electron-builder --mac --x64"

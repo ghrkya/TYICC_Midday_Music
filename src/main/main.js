@@ -38,14 +38,25 @@ function getFfmpegPath() {
     if (p && fs.existsSync(p)) { ffmpegPath = p; return p }
     // 打包后 asar 内的路径不可执行，替换为 asar.unpacked
     if (p) {
-      const unpacked = p.replace('.asar\\', '.asar.unpacked\\').replace('.asar/', '.asar.unpacked/')
+      const unpacked = p.replace(/\b\.asar\b(?=[\\\/])/, '.asar.unpacked')
       if (fs.existsSync(unpacked)) { ffmpegPath = unpacked; return unpacked }
     }
   } catch {}
 
-  // 方式2：直接从 asar.unpacked 目录查找（打包后 installdir 或者 win-unpacked）
-  const unpackedPath = path.join(process.resourcesPath || path.dirname(app.getPath('exe')), 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe')
-  try { if (fs.existsSync(unpackedPath)) { ffmpegPath = unpackedPath; return unpackedPath } } catch {}
+  // 方式2：直接从 asar.unpacked 目录查找（跨平台）
+  const ffSubdirs = isWin
+    ? ['win32-x64', 'win32-ia32']
+    : isMac
+      ? ['darwin-arm64', 'darwin-x64']
+      : ['linux-x64', 'linux-arm64', 'linux-arm', 'linux-ia32']
+  const ffName = isWin ? 'ffmpeg.exe' : 'ffmpeg'
+  const roots = [process.resourcesPath, path.dirname(app.getPath('exe')), app.getAppPath()].filter(Boolean)
+  for (const root of roots) {
+    for (const ffSubdir of ffSubdirs) {
+      const unpackedPath = path.join(root, 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', ffSubdir, ffName)
+      try { if (fs.existsSync(unpackedPath)) { ffmpegPath = unpackedPath; return unpackedPath } } catch {}
+    }
+  }
 
   return null
 }
@@ -86,7 +97,7 @@ let mainWindow = null
  */
 function getYtDlpPath() {
   // dev 模式：项目根目录 bin/
-  const bundledPath = path.join(app.getAppPath(), 'bin', isWin ? 'win/yt-dlp.exe' : 'mac/yt-dlp_macos')
+  const bundledPath = path.join(app.getAppPath(), 'bin', isWin ? 'win' : 'mac', isWin ? 'yt-dlp.exe' : 'yt-dlp_macos')
   try {
     if (fs.existsSync(bundledPath)) {
       const stat = fs.statSync(bundledPath)
@@ -95,7 +106,7 @@ function getYtDlpPath() {
   } catch {}
   // 打包后：resources/bin/ 中（extraResources 复制过去的）
   try {
-    const resPath = path.join(process.resourcesPath, 'bin', isWin ? 'win/yt-dlp.exe' : 'mac/yt-dlp_macos')
+    const resPath = path.join(process.resourcesPath, 'bin', isWin ? 'win' : 'mac', isWin ? 'yt-dlp.exe' : 'yt-dlp_macos')
     if (fs.existsSync(resPath)) {
       const stat = fs.statSync(resPath)
       if (stat.size > 1000) return resPath
@@ -109,32 +120,35 @@ function getYtDlpPath() {
  * 获取静态资源路径（如logo图片）
  */
 function getStaticPath(filename) {
-  return path.join(__dirname, '../../static', filename)
+  const candidates = [
+    path.join(process.resourcesPath || '', 'static', filename),
+    path.join(app.getAppPath(), 'static', filename),
+    path.join(__dirname, '../../static', filename)
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (candidate && fs.existsSync(candidate)) return candidate
+    } catch {}
+  }
+  return candidates.find(Boolean) || filename
 }
 
 /**
  * 获取预设开场音频
  */
 ipcMain.handle('get-preset-opening', async () => {
-  // 优先外部文件系统路径（FFmpeg 等外部工具无法读取 asar 内文件）
-  const candidates = [
-    path.join(process.resourcesPath || '', 'static', '广播站开头音频.MP3'),
-    path.join(app.getAppPath(), 'static', '广播站开头音频.MP3'),
-    path.join(__dirname, '../../static/广播站开头音频.MP3')
-  ]
-  for (const presetPath of candidates) {
-    try {
-      if (presetPath && fs.existsSync(presetPath)) {
-        const stat = fs.statSync(presetPath)
-        return {
-          success: true,
-          filePath: presetPath,
-          size: stat.size,
-          fileName: '广播站开头音频.MP3'
-        }
+  const presetPath = getStaticPath('广播站开头音频.MP3')
+  try {
+    if (presetPath && fs.existsSync(presetPath)) {
+      const stat = fs.statSync(presetPath)
+      return {
+        success: true,
+        filePath: presetPath,
+        size: stat.size,
+        fileName: '广播站开头音频.MP3'
       }
-    } catch {}
-  }
+    }
+  } catch {}
   return { success: false, message: '预设文件不存在' }
 })
 
@@ -161,7 +175,7 @@ function createWindow() {
     minHeight: 600,
     frame: true,
     title: 'TYICC午间悦听制作器',
-    icon: path.join(__dirname, '../../static/国际课程中心logo2_裁切.png'),
+    icon: getStaticPath('国际课程中心logo2_裁切.png'),
     webPreferences: {
       // 编译后 preload 在 dist-electron/ 下，用 __dirname 同时兼容 dev / prod
       preload: path.join(__dirname, 'index.js'),
@@ -1133,7 +1147,9 @@ ipcMain.handle('open-file-location', async (event, { filePath }) => {
 
 app.whenReady().then(async () => {
   // 旧 Roaming 路径（用于迁移）
-  const OLD_USER_DATA = path.join(os.homedir(), 'AppData', 'Roaming', 'tyicc-midday-music')
+  const OLD_USER_DATA = isWin
+    ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'tyicc-midday-music')
+    : null
 
   ensureDir(TEMP_DIR)
   ensureDir(DOWNLOAD_DIR)
@@ -1158,7 +1174,8 @@ app.whenReady().then(async () => {
   }
 
   // 从旧 Roaming 路径迁移数据到新的安装路径
-  try {
+  if (OLD_USER_DATA) {
+    try {
     const OLD_BASE = OLD_USER_DATA
     const OLD_BIN = path.join(OLD_BASE, 'bin')
     const OLD_TEMP = path.join(OLD_BASE, 'temp')
@@ -1192,6 +1209,7 @@ app.whenReady().then(async () => {
     }
   } catch (migrateErr) {
     console.warn('[migrate] 数据迁移跳过（首次运行或旧目录不存在）:', migrateErr.message)
+  }
   }
 
   createWindow()
