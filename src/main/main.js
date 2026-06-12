@@ -30,16 +30,23 @@ let ffmpegPath = null
 
 function getFfmpegPath() {
   if (ffmpegPath) return ffmpegPath
+  const ffFallbackName = isWin ? 'ffmpeg.exe' : 'ffmpeg'
 
   // 方式1：@ffmpeg-installer npm 包（dev 模式）
   try {
     const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg')
     const p = ffmpegInstaller.path
-    if (p && fs.existsSync(p)) { ffmpegPath = p; return p }
+    if (p && fs.existsSync(p)) {
+      const usable = ensureExecutableBinary(p, ffFallbackName)
+      if (usable) { ffmpegPath = usable; return usable }
+    }
     // 打包后 asar 内的路径不可执行，替换为 asar.unpacked
     if (p) {
       const unpacked = p.replace(/\b\.asar\b(?=[\\\/])/, '.asar.unpacked')
-      if (fs.existsSync(unpacked)) { ffmpegPath = unpacked; return unpacked }
+      if (fs.existsSync(unpacked)) {
+        const usable = ensureExecutableBinary(unpacked, ffFallbackName)
+        if (usable) { ffmpegPath = usable; return usable }
+      }
     }
   } catch {}
 
@@ -54,7 +61,12 @@ function getFfmpegPath() {
   for (const root of roots) {
     for (const ffSubdir of ffSubdirs) {
       const unpackedPath = path.join(root, 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', ffSubdir, ffName)
-      try { if (fs.existsSync(unpackedPath)) { ffmpegPath = unpackedPath; return unpackedPath } } catch {}
+      try {
+        if (fs.existsSync(unpackedPath)) {
+          const usable = ensureExecutableBinary(unpackedPath, ffFallbackName)
+          if (usable) { ffmpegPath = usable; return usable }
+        }
+      } catch {}
     }
   }
 
@@ -91,6 +103,34 @@ try {
 
 let mainWindow = null
 
+function ensureExecutableBinary(filePath, fallbackName) {
+  if (!filePath || !fs.existsSync(filePath)) return null
+  if (isWin) return filePath
+
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK)
+    return filePath
+  } catch {}
+
+  try {
+    fs.chmodSync(filePath, 0o755)
+    fs.accessSync(filePath, fs.constants.X_OK)
+    return filePath
+  } catch {}
+
+  // 若应用目录内二进制不可执行，复制到可写数据目录再赋予执行权限
+  try {
+    ensureDir(BIN_DIR)
+    const fallbackPath = path.join(BIN_DIR, fallbackName)
+    fs.copyFileSync(filePath, fallbackPath)
+    fs.chmodSync(fallbackPath, 0o755)
+    fs.accessSync(fallbackPath, fs.constants.X_OK)
+    return fallbackPath
+  } catch {}
+
+  return null
+}
+
 /**
  * 获取yt-dlp路径
  * 优先使用项目内打包的版本 (bin/)，回退到用户数据目录
@@ -101,7 +141,10 @@ function getYtDlpPath() {
   try {
     if (fs.existsSync(bundledPath)) {
       const stat = fs.statSync(bundledPath)
-      if (stat.size > 1000) return bundledPath
+      if (stat.size > 1000) {
+        const usable = ensureExecutableBinary(bundledPath, isWin ? 'yt-dlp.exe' : 'yt-dlp')
+        if (usable) return usable
+      }
     }
   } catch {}
   // 打包后：resources/bin/ 中（extraResources 复制过去的）
@@ -109,11 +152,15 @@ function getYtDlpPath() {
     const resPath = path.join(process.resourcesPath, 'bin', isWin ? 'win' : 'mac', isWin ? 'yt-dlp.exe' : 'yt-dlp_macos')
     if (fs.existsSync(resPath)) {
       const stat = fs.statSync(resPath)
-      if (stat.size > 1000) return resPath
+      if (stat.size > 1000) {
+        const usable = ensureExecutableBinary(resPath, isWin ? 'yt-dlp.exe' : 'yt-dlp')
+        if (usable) return usable
+      }
     }
   } catch {}
   // 回退到用户数据目录
-  return path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp')
+  const fallback = path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp')
+  return ensureExecutableBinary(fallback, isWin ? 'yt-dlp.exe' : 'yt-dlp') || fallback
 }
 
 /**

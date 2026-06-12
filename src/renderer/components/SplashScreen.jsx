@@ -14,11 +14,14 @@ export default function SplashScreen({ progress, status, networkOk }) {
         {/* Logo区域 */}
         <div className="splash-logo">
           <img
-            src="../static/国际课程中心logo2.png"
+            src="./static/国际课程中心logo2.png"
             alt="TYICC Logo"
             onError={(e) => {
-              // 如果相对路径加载失败，尝试绝对路径
-              e.target.src = '/static/国际课程中心logo2.png'
+              // file:// 环境下优先尝试同级相对路径
+              if (!e.target.dataset.fallbackTried) {
+                e.target.dataset.fallbackTried = '1'
+                e.target.src = 'static/国际课程中心logo2.png'
+              }
             }}
           />
         </div>

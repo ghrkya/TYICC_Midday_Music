@@ -21,6 +21,7 @@ export default function AudioRecorder({ onComplete, onCancel }) {
   const audioCtxRef = useRef(null)
   const sourceRef = useRef(null)
   const processorRef = useRef(null)
+  const monitorGainRef = useRef(null)
   const streamRef = useRef(null)
   const samplesRef = useRef([])
   const timerRef = useRef(null)
@@ -54,6 +55,10 @@ export default function AudioRecorder({ onComplete, onCancel }) {
     if (processorRef.current) {
       processorRef.current.disconnect()
       processorRef.current = null
+    }
+    if (monitorGainRef.current) {
+      monitorGainRef.current.disconnect()
+      monitorGainRef.current = null
     }
     if (sourceRef.current) {
       sourceRef.current.disconnect()
@@ -133,22 +138,44 @@ export default function AudioRecorder({ onComplete, onCancel }) {
 
       const audioCtx = new AudioContext()
       audioCtxRef.current = audioCtx
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume()
+      }
 
       const source = audioCtx.createMediaStreamSource(stream)
       sourceRef.current = source
 
       // ScriptProcessorNode 收集 PCM 数据
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1)
+      const processor = audioCtx.createScriptProcessor(4096, 2, 1)
       processorRef.current = processor
       samplesRef.current = []
 
       processor.onaudioprocess = (e) => {
-        const input = e.inputBuffer.getChannelData(0)
-        samplesRef.current.push(new Float32Array(input))
+        const inputBuffer = e.inputBuffer
+        const channels = inputBuffer.numberOfChannels
+        const frameLen = inputBuffer.length
+        if (channels <= 0 || frameLen <= 0) return
+
+        // mac 上某些设备可能只有右声道有信号，这里做多声道平均避免“有时长但无声”。
+        const mixed = new Float32Array(frameLen)
+        for (let ch = 0; ch < channels; ch++) {
+          const channelData = inputBuffer.getChannelData(ch)
+          for (let i = 0; i < frameLen; i++) {
+            mixed[i] += channelData[i]
+          }
+        }
+        for (let i = 0; i < frameLen; i++) {
+          mixed[i] /= channels
+        }
+        samplesRef.current.push(mixed)
       }
 
       source.connect(processor)
-      processor.connect(audioCtx.destination)
+      const monitorGain = audioCtx.createGain()
+      monitorGain.gain.value = 0
+      monitorGainRef.current = monitorGain
+      processor.connect(monitorGain)
+      monitorGain.connect(audioCtx.destination)
 
       setIsRecording(true)
       setRecordedTime(0)
