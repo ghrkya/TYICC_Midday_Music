@@ -8,7 +8,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { Button, Select, message } from 'antd'
 import { AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ReloadOutlined } from '@ant-design/icons'
-import pcmRecorderWorkletSource from './pcm-recorder.worklet.js?raw'
+import pcmRecorderWorkletUrl from './pcm-recorder.worklet.js?url'
 
 export default function AudioRecorder({ onComplete, onCancel }) {
   const [isRecording, setIsRecording] = useState(false)
@@ -146,13 +146,7 @@ export default function AudioRecorder({ onComplete, onCancel }) {
       }
       sampleRateRef.current = audioCtx.sampleRate
 
-      const workletBlob = new Blob([pcmRecorderWorkletSource], { type: 'text/javascript' })
-      const workletUrl = URL.createObjectURL(workletBlob)
-      try {
-        await audioCtx.audioWorklet.addModule(workletUrl)
-      } finally {
-        URL.revokeObjectURL(workletUrl)
-      }
+      await audioCtx.audioWorklet.addModule(pcmRecorderWorkletUrl)
 
       const source = audioCtx.createMediaStreamSource(stream)
       sourceRef.current = source

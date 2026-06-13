@@ -290,6 +290,8 @@ ipcMain.handle('download-yt-dlp', async () => {
     `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`,
     `https://github.moeyy.xyz/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`,
     `https://ghproxy.net/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`
+    `https://gh-proxy.com/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`
+    `https://ghproxy.homeboyc.cn/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`
   ]
 
   function attemptDownload(urlIndex) {
