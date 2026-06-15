@@ -8,7 +8,9 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { Button, Select, message } from 'antd'
 import { AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ReloadOutlined } from '@ant-design/icons'
-import pcmRecorderWorkletUrl from './pcm-recorder.worklet.js?url'
+import pcmRecorderWorkletSource from './pcm-recorder.worklet.js?raw'
+
+const WORKLET_BLOB_TYPE = 'application/javascript'
 
 export default function AudioRecorder({ onComplete, onCancel }) {
   const [isRecording, setIsRecording] = useState(false)
@@ -27,12 +29,17 @@ export default function AudioRecorder({ onComplete, onCancel }) {
   const samplesRef = useRef([])
   const sampleRateRef = useRef(48000)
   const timerRef = useRef(null)
+  const workletUrlRef = useRef(null)
 
   useEffect(() => {
     loadMicDevices()
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
       if (audioUrl && audioUrl.startsWith('blob:')) URL.revokeObjectURL(audioUrl)
+      if (workletUrlRef.current) {
+        URL.revokeObjectURL(workletUrlRef.current)
+        workletUrlRef.current = null
+      }
       stopRecordingInternal()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -146,7 +153,14 @@ export default function AudioRecorder({ onComplete, onCancel }) {
       }
       sampleRateRef.current = audioCtx.sampleRate
 
-      await audioCtx.audioWorklet.addModule(pcmRecorderWorkletUrl)
+      // Blob URL 方式加载 worklet：Electron 打包后 file:// 协议无法可靠解析 ?url 的相对路径，
+      // 而 blob: 协议在所有平台（含 macOS）均受 AudioWorklet.addModule 支持。
+      if (!workletUrlRef.current) {
+        const workletBlob = new Blob([pcmRecorderWorkletSource], { type: WORKLET_BLOB_TYPE })
+        workletUrlRef.current = URL.createObjectURL(workletBlob)
+      }
+      console.log('[AudioRecorder] worklet blob URL:', workletUrlRef.current)
+      await audioCtx.audioWorklet.addModule(workletUrlRef.current)
 
       const source = audioCtx.createMediaStreamSource(stream)
       sourceRef.current = source
