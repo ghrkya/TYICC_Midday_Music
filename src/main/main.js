@@ -746,6 +746,55 @@ async function fallbackDownloadByApi({ input, outputDir, randomUA }) {
 }
 
 /**
+ * 解析 b23.tv 短链接：发起 HTTP HEAD 请求跟随重定向，获取真实视频页 URL
+ */
+function resolveB23TvUrl(shortUrl) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(shortUrl)
+    const mod = urlObj.protocol === 'https:' ? https : http
+    const req = mod.get(shortUrl, { timeout: 10000, rejectUnauthorized: false }, (res) => {
+      // 跟随重定向拿到最终 URL
+      const finalUrl = res.headers.location || res.responseUrl || shortUrl
+      res.resume()
+      resolve(finalUrl)
+    })
+    req.on('error', reject)
+    req.on('timeout', () => { req.destroy(); reject(new Error('b23.tv 解析超时')) })
+  })
+}
+
+/**
+ * 解析并标准化 B 站输入：支持 BV 号、bilibili 链接、b23.tv 短链接
+ * 返回 { videoUrl, bvId }，videoUrl 可传给 yt-dlp，bvId 可用于 API 兜底
+ */
+async function resolveBilibiliInput(input) {
+  const text = String(input || '').trim()
+
+  // 情况1：纯 BV 号
+  if (/^BV[0-9A-Za-z]{10,12}$/i.test(text)) {
+    return { videoUrl: `https://www.bilibili.com/video/${text}`, bvId: text }
+  }
+
+  // 情况2：b23.tv 短链接 — 跟随重定向解析出真实 URL 和 BV
+  if (/b23\.tv\/[a-zA-Z0-9]+/i.test(text)) {
+    const urlWithProto = /^https?:\/\//i.test(text) ? text : 'https://' + text
+    const resolvedUrl = await resolveB23TvUrl(urlWithProto)
+    const bvId = extractBvId(resolvedUrl)
+    return { videoUrl: urlWithProto, bvId } // yt-dlp 直接用短链接，API 用解析出的 BV
+  }
+
+  // 情况3：普通 bilibili 链接
+  if (/bilibili\.com\//i.test(text)) {
+    const bvId = extractBvId(text)
+    return { videoUrl: text, bvId }
+  }
+
+  // 情况4：兜底 — 原样返回
+  const bvId = extractBvId(text)
+  return { videoUrl: /^https?:\/\//i.test(text) ? text : `https://www.bilibili.com/video/${text}`, bvId }
+}
+
+/**
  * 提取B站下载错误信息 - 将yt-dlp的冗长错误输出转为简洁中文提示
  */
 function extractBilibiliError(errorMsg) {
@@ -794,15 +843,34 @@ function extractBilibiliError(errorMsg) {
 ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'best' }) => {
   try {
     ensureDir(outputDir)
+
+    // 【关键修复】下载前清理目录中所有旧 mp3，防止扫描时误取残留文件
+    try {
+      for (const f of fs.readdirSync(outputDir)) {
+        if (f.toLowerCase().endsWith('.mp3')) {
+          const fp = path.join(outputDir, f)
+          try { fs.unlinkSync(fp) } catch {}
+        }
+      }
+    } catch (e) {
+      console.warn('[download-bilibili] 清理旧 mp3 失败:', e.message)
+    }
+
     const ytDlpPath = getYtDlpPath()
 
     if (!fs.existsSync(ytDlpPath)) {
       return { success: false, message: 'yt-dlp未下载，请在启动页等待下载完成' }
     }
 
-    let videoUrl = url
-    if (!url.startsWith('http')) {
-      videoUrl = `https://www.bilibili.com/video/${url}`
+    // 先标准化输入：支持 BV 号、bilibili 链接、b23.tv 短链接
+    let videoUrl, bvIdForFallback
+    try {
+      const resolved = await resolveBilibiliInput(url)
+      videoUrl = resolved.videoUrl
+      bvIdForFallback = resolved.bvId
+    } catch {
+      videoUrl = url.startsWith('http') ? url : `https://www.bilibili.com/video/${url}`
+      bvIdForFallback = extractBvId(url)
     }
 
     const outputTemplate = path.join(outputDir, '%(title)s.%(ext)s')
@@ -866,6 +934,9 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
       })
     }
 
+    // 让 bvIdForFallback 对当前 scope 可见
+    const fallbackBvId = bvIdForFallback
+
     return new Promise((resolve) => {
       ;(async () => {
         let attempt = await runYtDlpAttempt([], '默认策略')
@@ -884,7 +955,7 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
               console.warn('[yt-dlp] 增强策略仍失败，启动 API 直连兜底下载')
               try {
                 const fallbackResult = await fallbackDownloadByApi({
-                  input: url,
+                  input: fallbackBvId || url,
                   outputDir,
                   randomUA
                 })
@@ -895,7 +966,7 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
                 try {
                   console.warn('[yt-dlp] API 兜底失败，启动 视频下载后提取音频 方案')
                   const videoFallbackResult = await fallbackDownloadByVideoThenExtract({
-                    input: url,
+                    input: fallbackBvId || url,
                     outputDir,
                     quality
                   })

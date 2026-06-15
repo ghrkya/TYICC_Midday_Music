@@ -23,10 +23,16 @@ export default function BilibiliDownloader({ onDownload, onCancel, networkOk }) 
       return trimmed
     }
 
-    // B站视频链接 - 提取原始大小写的BV号
-    const match = trimmed.match(/(?:bilibili\.com\/video\/)(BV[a-zA-Z0-9]+)/i)
-    if (match) {
-      return match[1]
+    // B站视频链接 - 提取BV号（支持带 query 参数，如 ?share_source=...）
+    const bvMatch = trimmed.match(/bilibili\.com\/video\/(BV[a-zA-Z0-9]+)/i)
+    if (bvMatch) {
+      return bvMatch[1]
+    }
+
+    // b23.tv 短链接 - 提取完整 URL（支持中文前缀，如 【标题】 https://b23.tv/xxx）
+    const b23Match = trimmed.match(/https?:\/\/b23\.tv\/[a-zA-Z0-9]+/i) || trimmed.match(/b23\.tv\/[a-zA-Z0-9]+/i)
+    if (b23Match) {
+      return b23Match[0].startsWith('http') ? b23Match[0] : 'https://' + b23Match[0]
     }
 
     return null
@@ -98,7 +104,7 @@ export default function BilibiliDownloader({ onDownload, onCancel, networkOk }) 
 
       <Space direction="vertical" style={{ width: '100%' }}>
         <Input
-          placeholder="输入BV号或B站视频链接，例如：BV1xx411c7mD"
+          placeholder="输入BV号、B站链接或 b23.tv 短链接"
           prefix={<LinkOutlined style={{ color: '#8888AA' }} />}
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
@@ -123,7 +129,7 @@ export default function BilibiliDownloader({ onDownload, onCancel, networkOk }) 
 
         {/* 使用说明 */}
         <div style={{ fontSize: 12, color: '#8888AA', marginTop: 4 }}>
-          支持格式：BV号、完整B站视频链接
+          支持格式：BV号、B站视频链接、b23.tv 短链接
         </div>
       </Space>
     </div>

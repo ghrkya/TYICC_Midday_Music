@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react'
-import { Button, message } from 'antd'
+import { Button, message, Modal } from 'antd'
 import {
   FolderOpenOutlined,
   DownloadOutlined,
@@ -292,7 +292,19 @@ export default function StepPanel({
 
             {/* 录制音频（开场语、转场、结语可用） */}
             {(step.key === 'greeting' || step.key === 'transition' || step.key === 'ending') && (
-              <button className="action-btn" onClick={() => setShowRecorder(true)}>
+              <button className="action-btn" onClick={() => {
+                const isMac = /mac/i.test(navigator.userAgent)
+                if (isMac) {
+                  Modal.info({
+                    title: '此功能暂不支持 macOS',
+                    content: 'Mac版本功能未实现，请使用手机录音并AirDrop或使用语音备忘录。',
+                    okText: '知道了',
+                    centered: true
+                  })
+                } else {
+                  setShowRecorder(true)
+                }
+              }}>
                 <AudioOutlined />
                 <span>录制音频</span>
               </button>
