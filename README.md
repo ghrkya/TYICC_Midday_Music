@@ -1,2 +1,4 @@
 # TYICC_Midday_Music
-TYICC午间悦听栏目制作器
+一个基于electron的TYICC午间悦听栏目制作器
+
+请注意，由于开发者没有Mac电脑且MacOS目前的录音功能有未知错误，MacOS系统上的录音功能暂时不可用。
