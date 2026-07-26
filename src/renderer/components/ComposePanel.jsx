@@ -25,11 +25,41 @@ const COMPOSE_ORDER = [
   { key: 'ending', label: '结语' }
 ]
 
-export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled, ffmpegOk }) {
+const SPEECH_KEYS = new Set(['greeting', 'transition', 'ending'])
+const DEFAULT_BGM_VOLUME_DB = -12
+const EXPORT_NAME_STORAGE_KEY = 'tyicc.export.studentName'
+
+function sanitizeFilePart(text) {
+  return String(text || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+}
+
+function dbToLinear(db) {
+  const d = Number(db)
+  if (Number.isNaN(d)) return Math.pow(10, DEFAULT_BGM_VOLUME_DB / 20)
+  return Math.pow(10, d / 20)
+}
+
+export default function ComposePanel({ stepFiles, bgmTracks, skippedSteps, loudnessEnabled, ffmpegOk }) {
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [studentName, setStudentName] = useState(() => {
+    try {
+      return localStorage.getItem(EXPORT_NAME_STORAGE_KEY) || ''
+    } catch {
+      return ''
+    }
+  })
+  const [dateMode, setDateMode] = useState('known') // known | unknown
+  const [programDate, setProgramDate] = useState(() => new Date().toISOString().slice(0, 10))
+
   const [composing, setComposing] = useState(false)
   const [composeProgress, setComposeProgress] = useState(0)
   const [composeStatus, setComposeStatus] = useState('idle') // idle | processing | done | error
+  const [composeMessage, setComposeMessage] = useState('')
   const [outputPath, setOutputPath] = useState('')
+  const roundedProgress = Math.round(Number(composeProgress) || 0)
 
   /**
    * 检查所有步骤是否已准备就绪（被跳过的也算就绪）
@@ -46,11 +76,13 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
   /**
    * 处理合成
    */
-  const handleCompose = async () => {
+  const handleCompose = async ({ studentName: name, programDate: dateLabel, defaultName }) => {
     if (!allStepsReady()) {
       message.warning('请先完成所有步骤的音频选择')
       return
     }
+
+    let unsubscribeConcatProgress = null
 
     try {
       // 选择保存路径
@@ -60,7 +92,7 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
       }
 
       const saveResult = await window.electronAPI.openSaveDialog({
-        defaultName: `TYICC午间悦听_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.mp3`,
+        defaultName: defaultName || `TYICC午间悦听_${new Date().toISOString().slice(0, 10)}.mp3`,
         filters: [
           { name: '音频文件', extensions: ['mp3', 'wav'] }
         ]
@@ -73,6 +105,7 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
       setOutputPath(saveResult.filePath || '')
       setComposing(true)
       setComposeStatus('processing')
+      setComposeMessage('正在准备合成任务...')
       setComposeProgress(0)
 
       // 阶段1: 收集文件
@@ -84,32 +117,35 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
 
       // 阶段2: 如果开启响度平衡，对每个音频进行处理
       setComposeProgress(15)
-      let processedFiles = []
+      let processedEntries = []
 
-      // 展平所有待合成的文件路径（跳过被跳过的步骤）
-      const collectFilePaths = () => {
-        const paths = []
+      // 展平所有待合成的文件（跳过被跳过的步骤）
+      const collectEntries = () => {
+        const entries = []
         for (const key of orderKeys) {
           if (skippedSteps && skippedSteps.has(key)) continue
           const val = stepFiles[key]
           if (key === 'music' && Array.isArray(val)) {
             for (const mf of val) {
-              if (mf && mf.path) paths.push(mf.path.replace(/\\/g, '/'))
+              if (mf && mf.path) {
+                entries.push({ key, path: mf.path.replace(/\\/g, '/'), label: mf.name || 'music' })
+              }
             }
           } else if (val && val.path) {
-            paths.push(val.path.replace(/\\/g, '/'))
+            entries.push({ key, path: val.path.replace(/\\/g, '/'), label: val.name || key })
           }
         }
-        return paths
+        return entries
       }
 
-      if (loudnessEnabled && ffmpegOk) {
-        setComposeStatus('正在对各个音频进行响度平衡...')
-        const allPaths = collectFilePaths()
+      const allEntries = collectEntries()
 
-        for (let i = 0; i < allPaths.length; i++) {
-          const normalizedPath = allPaths[i]
-          setComposeProgress(15 + (i / allPaths.length) * 50)
+      if (loudnessEnabled && ffmpegOk) {
+        setComposeMessage('正在对各个音频进行响度平衡...')
+        for (let i = 0; i < allEntries.length; i++) {
+          const entry = allEntries[i]
+          const normalizedPath = entry.path
+          setComposeProgress(15 + (i / Math.max(1, allEntries.length)) * 45)
 
           const normalizeResult = await window.electronAPI.normalizeLoudness({
             inputPath: normalizedPath,
@@ -118,29 +154,81 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
           })
 
           if (normalizeResult.success) {
-            processedFiles.push(`${tempDir}/normalized_${i}.wav`)
+            processedEntries.push({ ...entry, path: `${tempDir}/normalized_${i}.wav` })
           } else {
-            message.warning(`第 ${i + 1} 段响度平衡失败，使用原始文件`)
-            processedFiles.push(normalizedPath)
+            message.warning(`第 ${i + 1} 段响度平衡失败，使用原始文件`) 
+            processedEntries.push(entry)
           }
         }
       } else {
         // 不使用响度平衡，直接拼接
-        processedFiles = collectFilePaths()
+        processedEntries = allEntries
       }
 
-      // 阶段3: 拼接音频
-      setComposeProgress(70)
-      setComposeStatus('正在拼接各段落...')
+      // 阶段3: 口播叠加背景音乐（在响度平衡之后）
+      setComposeMessage('正在为口播段叠加背景音乐...')
+      for (let i = 0; i < processedEntries.length; i++) {
+        const entry = processedEntries[i]
+        setComposeProgress(60 + (i / Math.max(1, processedEntries.length)) * 20)
+        if (!SPEECH_KEYS.has(entry.key)) continue
+
+        const bgm = bgmTracks && bgmTracks[entry.key]
+        if (!bgm || !bgm.path) continue
+
+        const durRes = await window.electronAPI.getAudioDuration({ filePath: entry.path })
+        if (!durRes.success) {
+          throw new Error(`无法读取${entry.label}时长：${durRes.message || '未知错误'}`)
+        }
+        const voiceDuration = Number(durRes.duration || 0)
+        const startSec = Number(bgm.startTime || 0)
+        const volumeDb = (typeof bgm.volumeDb === 'number') ? bgm.volumeDb : DEFAULT_BGM_VOLUME_DB
+        const bgmVolume = dbToLinear(volumeDb)
+
+        const mixOut = `${tempDir}/bgm_mix_${entry.key}_${i}.wav`
+        const mixRes = await window.electronAPI.mixVoiceWithBgm({
+          voicePath: entry.path,
+          bgmPath: bgm.path,
+          startSec,
+          durationSec: voiceDuration,
+          bgmVolume,
+          outputPath: mixOut
+        })
+
+        if (!mixRes.success) {
+          throw new Error(`口播背景音乐混音失败（${entry.label}）：${mixRes.message || '未知错误'}`)
+        }
+        entry.path = mixOut
+      }
+
+      // 阶段4: 拼接音频
+      setComposeProgress(85)
+      setComposeMessage('正在拼接各段落...')
+
+      const concatJobId = `concat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      if (window.electronAPI?.onConcatenateProgress) {
+        unsubscribeConcatProgress = window.electronAPI.onConcatenateProgress((payload) => {
+          if (!payload || payload.jobId !== concatJobId) return
+          const pct = Math.max(0, Math.min(100, Number(payload.percent) || 0))
+          const mapped = 85 + pct * 0.14
+          setComposeProgress((prev) => Math.round(Math.max(prev, mapped)))
+          setComposeMessage(`正在拼接各段落... ${Math.round(pct)}%`)
+        })
+      }
 
       const concatResult = await window.electronAPI.concatenateAudio({
-        fileList: processedFiles,
-        outputPath: saveResult.filePath
+        fileList: processedEntries.map(e => e.path),
+        outputPath: saveResult.filePath,
+        jobId: concatJobId,
+        metadata: {
+          studentName: name,
+          programDate: dateLabel
+        }
       })
 
       if (concatResult.success) {
         setComposeProgress(100)
         setComposeStatus('done')
+        setComposeMessage('合成完成')
         // 自动打开输出文件所在文件夹
         if (window.electronAPI && saveResult.filePath) {
           window.electronAPI.openFileLocation({ filePath: saveResult.filePath }).catch(() => {})
@@ -152,10 +240,51 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
 
     } catch (err) {
       setComposeStatus('error')
+      setComposeMessage('合成失败，请重试')
       message.error('合成出错：' + err.message)
     } finally {
+      if (unsubscribeConcatProgress) {
+        unsubscribeConcatProgress()
+      }
       setComposing(false)
     }
+  }
+
+  const openExportModal = () => {
+    if (!allStepsReady()) {
+      message.warning('请先完成所有步骤的音频选择')
+      return
+    }
+    setExportModalOpen(true)
+  }
+
+  const confirmExportMeta = async () => {
+    const cleanName = sanitizeFilePart(studentName)
+    if (!cleanName) {
+      message.warning('请填写姓名')
+      return
+    }
+
+    const knownDate = dateMode === 'known'
+    const cleanDate = knownDate ? sanitizeFilePart(programDate) : ''
+    if (knownDate && !cleanDate) {
+      message.warning('请填写预计播出日期，或将日期设为“未知”')
+      return
+    }
+
+    const dateLabel = knownDate ? cleanDate : '未知'
+    const defaultName = `TYICC午间悦听_${cleanName}${knownDate ? `_${cleanDate}` : ''}.mp3`
+
+    try {
+      localStorage.setItem(EXPORT_NAME_STORAGE_KEY, cleanName)
+    } catch {}
+
+    setExportModalOpen(false)
+    await handleCompose({
+      studentName: cleanName,
+      programDate: dateLabel,
+      defaultName
+    })
   }
 
   /**
@@ -244,7 +373,7 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
       {composeStatus === 'processing' && (
         <div className="compose-progress">
           <Progress
-            percent={composeProgress}
+            percent={roundedProgress}
             status="active"
             strokeColor={{
               from: '#6C63FF',
@@ -262,7 +391,7 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
             gap: 8
           }}>
             <LoadingOutlined />
-            正在合成...
+            {composeMessage || '正在合成...'}
           </div>
         </div>
       )}
@@ -294,7 +423,7 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
 
       {composeStatus === 'error' && (
         <div className="compose-progress">
-          <Progress percent={composeProgress} status="exception" />
+          <Progress percent={roundedProgress} status="exception" />
           <div style={{
             textAlign: 'center',
             fontSize: 13,
@@ -317,7 +446,7 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
           type="primary"
           size="large"
           icon={<SaveOutlined />}
-          onClick={handleCompose}
+          onClick={openExportModal}
           loading={composing}
           disabled={!allStepsReady()}
         >
@@ -330,6 +459,48 @@ export default function ComposePanel({ stepFiles, skippedSteps, loudnessEnabled,
           </Button>
         )}
       </Space>
+
+      <Modal
+        title="导出信息"
+        open={exportModalOpen}
+        onCancel={() => setExportModalOpen(false)}
+        onOk={confirmExportMeta}
+        okText="继续导出"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>姓名</div>
+            <input
+              value={studentName}
+              onChange={(e) => setStudentName(e.target.value)}
+              placeholder="请输入姓名"
+              style={{ width: '100%', padding: '6px 10px', border: '1px solid #d9d9d9', borderRadius: 6 }}
+            />
+          </div>
+
+          <div>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>预计播出日期</div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <Button size="small" type={dateMode === 'known' ? 'primary' : 'default'} onClick={() => setDateMode('known')}>
+                已知
+              </Button>
+              <Button size="small" type={dateMode === 'unknown' ? 'primary' : 'default'} onClick={() => setDateMode('unknown')}>
+                未知
+              </Button>
+            </div>
+            {dateMode === 'known' && (
+              <input
+                type="date"
+                value={programDate}
+                onChange={(e) => setProgramDate(e.target.value)}
+                style={{ width: '100%', padding: '6px 10px', border: '1px solid #d9d9d9', borderRadius: 6 }}
+              />
+            )}
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

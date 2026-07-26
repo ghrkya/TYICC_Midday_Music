@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react'
-import { Button, message } from 'antd'
+import { Button, message, Modal } from 'antd'
 import {
   PlayCircleOutlined,
   SoundOutlined,
@@ -75,6 +75,13 @@ const PRESET_FILES = {
   ending: null
 }
 
+const VOICE_STEP_KEYS = ['greeting', 'transition', 'ending']
+const DEFAULT_BGM_VOLUME_DB = -12
+
+function isVoiceStep(stepKey) {
+  return VOICE_STEP_KEYS.includes(stepKey)
+}
+
 export default function Workflow({ networkOk, ffmpegOk }) {
   // 当前步骤索引 (0-4)
   const [currentStep, setCurrentStep] = useState(0)
@@ -86,6 +93,12 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     speech: null,
     transition: null,
     music: [],        // 每日歌曲为文件列表
+    ending: null
+  })
+
+  const [bgmTracks, setBgmTracks] = useState({
+    greeting: null,
+    transition: null,
     ending: null
   })
 
@@ -116,6 +129,201 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       ...prev,
       [stepKey]: null
     }))
+  }, [])
+
+  const askConfirmRemoveShortBgm = useCallback(() => {
+    return new Promise((resolve) => {
+      Modal.confirm({
+        title: '背景音乐时长不足',
+        content: '当前背景音乐时间不符（较口播过短），导入后将删除原背景音乐，是否继续？',
+        okText: '继续导入',
+        cancelText: '取消',
+        centered: true,
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      })
+    })
+  }, [])
+
+  const getDurationByPath = useCallback(async (filePath) => {
+    if (!filePath || !window.electronAPI) return 0
+    const res = await window.electronAPI.getAudioDuration({ filePath })
+    if (!res || !res.success) return 0
+    return Number(res.duration || 0)
+  }, [])
+
+  const setStepFileWithBgmCheck = useCallback(async (stepKey, fileInfo) => {
+    if (!isVoiceStep(stepKey)) {
+      setStepFile(stepKey, fileInfo)
+      return true
+    }
+
+    const currentBgm = bgmTracks[stepKey]
+    let voiceDuration = Number(fileInfo?.duration || 0)
+    if (!voiceDuration && fileInfo?.path) {
+      voiceDuration = await getDurationByPath(fileInfo.path)
+    }
+
+    if (!currentBgm) {
+      setStepFiles(prev => ({ ...prev, [stepKey]: { ...fileInfo, duration: voiceDuration || fileInfo?.duration } }))
+      return true
+    }
+
+    let bgmDuration = Number(currentBgm.duration || 0)
+    if (!bgmDuration && currentBgm.path) {
+      bgmDuration = await getDurationByPath(currentBgm.path)
+    }
+
+    if (voiceDuration > 0 && bgmDuration > 0 && bgmDuration + 0.01 < voiceDuration) {
+      const confirmed = await askConfirmRemoveShortBgm()
+      if (!confirmed) {
+        return false
+      }
+      setStepFiles(prev => ({ ...prev, [stepKey]: { ...fileInfo, duration: voiceDuration || fileInfo?.duration } }))
+      setBgmTracks(prev => ({ ...prev, [stepKey]: null }))
+      return true
+    }
+
+    let nextBgm = currentBgm
+    if (voiceDuration > 0 && bgmDuration > 0) {
+      const maxStart = Math.max(0, bgmDuration - voiceDuration)
+      const rawStart = Number(currentBgm.startTime || 0)
+      const nextStart = (rawStart <= maxStart + 0.01) ? rawStart : 0
+      const nextEnd = Math.min(bgmDuration, nextStart + voiceDuration)
+      nextBgm = {
+        ...currentBgm,
+        duration: bgmDuration,
+        voiceDuration,
+        startTime: nextStart,
+        endTime: nextEnd
+      }
+    }
+
+    setStepFiles(prev => ({ ...prev, [stepKey]: { ...fileInfo, duration: voiceDuration || fileInfo?.duration } }))
+    setBgmTracks(prev => ({ ...prev, [stepKey]: nextBgm }))
+    return true
+  }, [bgmTracks, askConfirmRemoveShortBgm, getDurationByPath, setStepFile])
+
+  const ensureBgmDuration = useCallback(async (stepKey, bgmPath) => {
+    const voiceFile = stepFiles[stepKey]
+    if (!voiceFile || !voiceFile.path) {
+      throw new Error('请先准备口播音频，再添加背景音乐')
+    }
+    if (!window.electronAPI) {
+      throw new Error('该功能仅在桌面应用可用')
+    }
+    const voiceDurRes = await window.electronAPI.getAudioDuration({ filePath: voiceFile.path })
+    const bgmDurRes = await window.electronAPI.getAudioDuration({ filePath: bgmPath })
+    if (!voiceDurRes.success || !bgmDurRes.success) {
+      throw new Error((voiceDurRes.message || bgmDurRes.message || '无法读取音频时长'))
+    }
+    const voiceDuration = Number(voiceDurRes.duration || 0)
+    const bgmDuration = Number(bgmDurRes.duration || 0)
+    if (bgmDuration + 0.01 < voiceDuration) {
+      throw new Error(`背景音乐时长不足：背景 ${bgmDuration.toFixed(1)}s，口播 ${voiceDuration.toFixed(1)}s`)
+    }
+    return { voiceDuration, bgmDuration }
+  }, [stepFiles])
+
+  const onSelectBgmLocal = useCallback(async (stepKey) => {
+    try {
+      if (!window.electronAPI) return
+      const result = await window.electronAPI.openFileDialog()
+      if (result.canceled || !result.filePaths?.length) return
+      const filePath = result.filePaths[0]
+      const fileInfo = await window.electronAPI.getFileInfo({ filePath })
+      const { voiceDuration, bgmDuration } = await ensureBgmDuration(stepKey, filePath)
+      setBgmTracks(prev => ({
+        ...prev,
+        [stepKey]: {
+          name: filePath.split(/[\\/]/).pop(),
+          path: filePath,
+          source: 'local',
+          size: fileInfo.size,
+          startTime: 0,
+          endTime: voiceDuration,
+          duration: bgmDuration,
+          voiceDuration,
+          volumeDb: DEFAULT_BGM_VOLUME_DB
+        }
+      }))
+      message.success('背景音乐已添加')
+    } catch (err) {
+      message.warning(err.message)
+    }
+  }, [ensureBgmDuration])
+
+  const onSelectBgmBilibili = useCallback(async (stepKey, input) => {
+    try {
+      if (!window.electronAPI) return
+      if (!networkOk) {
+        message.warning('B站网络连接失败，下载可能无法进行')
+      }
+      const tempDir = await window.electronAPI.getTempDir()
+      const result = await window.electronAPI.downloadBilibili({
+        url: input,
+        outputDir: tempDir,
+        quality: 'best'
+      })
+      if (!result.success) {
+        message.error(result.message || '背景音乐下载失败')
+        return
+      }
+      const fileInfo = await window.electronAPI.getFileInfo({ filePath: result.filePath })
+      const { voiceDuration, bgmDuration } = await ensureBgmDuration(stepKey, result.filePath)
+      setBgmTracks(prev => ({
+        ...prev,
+        [stepKey]: {
+          name: result.fileName,
+          path: result.filePath,
+          source: 'bilibili',
+          bvId: input,
+          size: fileInfo.size,
+          startTime: 0,
+          endTime: voiceDuration,
+          duration: bgmDuration,
+          voiceDuration,
+          volumeDb: DEFAULT_BGM_VOLUME_DB
+        }
+      }))
+      message.success('背景音乐下载并添加成功')
+    } catch (err) {
+      message.warning(err.message)
+    }
+  }, [networkOk, ensureBgmDuration])
+
+  const onRemoveBgm = useCallback((stepKey) => {
+    setBgmTracks(prev => ({ ...prev, [stepKey]: null }))
+  }, [])
+
+  const onUpdateBgmSegment = useCallback((stepKey, segment) => {
+    setBgmTracks(prev => {
+      const old = prev[stepKey]
+      if (!old) return prev
+      return {
+        ...prev,
+        [stepKey]: {
+          ...old,
+          startTime: Number(segment.startTime || 0),
+          endTime: Number(segment.endTime || 0),
+          duration: Number(segment.duration || old.duration || 0)
+        }
+      }
+    })
+  }, [])
+
+  const onUpdateBgmVolume = useCallback((stepKey, volumeDb) => {
+    setBgmTracks(prev => {
+      const old = prev[stepKey]
+      if (!old) return prev
+      return {
+        ...prev,
+        [stepKey]: {
+          ...old,
+          volumeDb: Number(volumeDb)
+        }
+      }
+    })
   }, [])
 
   /**
@@ -178,20 +386,22 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       })
 
       if (result.success) {
-        setStepFile(stepKey, {
+        const applied = await setStepFileWithBgmCheck(stepKey, {
           name: result.fileName,
           path: result.filePath,
           source: 'bilibili',
           bvId: bvId
         })
-        message.success(`下载成功：${result.fileName}`)
+        if (applied) {
+          message.success(`下载成功：${result.fileName}`)
+        }
       } else {
         message.error(result.message || '下载失败')
       }
     } catch (err) {
       message.error('下载出错：' + err.message)
     }
-  }, [networkOk, loudnessEnabled, ffmpegOk, setStepFile])
+  }, [networkOk, setStepFileWithBgmCheck])
 
   /**
    * 向音乐列表添加本地文件
@@ -302,18 +512,20 @@ export default function Workflow({ networkOk, ffmpegOk }) {
         // 获取文件信息
         const fileInfo = await window.electronAPI.getFileInfo({ filePath })
 
-        setStepFile(stepKey, {
+        const applied = await setStepFileWithBgmCheck(stepKey, {
           name: fileName,
           path: filePath,
           source: 'local',
           size: fileInfo.size
         })
-        message.success(`已选择：${fileName}`)
+        if (applied) {
+          message.success(`已选择：${fileName}`)
+        }
       }
     } catch (err) {
       message.error('选择文件出错：' + err.message)
     }
-  }, [setStepFile])
+  }, [setStepFileWithBgmCheck])
 
   // 判断某步骤是否已完成（有文件或被跳过）
   const isStepDone = (key) => {
@@ -376,12 +588,12 @@ export default function Workflow({ networkOk, ffmpegOk }) {
         <div className="app-header-left">
           <img
             className="app-header-logo"
-            src="./static/国际课程中心logo2_裁切.png"
+            src="./static/TYICC午间悦听logo_V1.0_画板 1.png"
             alt="Logo"
             onError={(e) => {
               if (!e.target.dataset.fallbackTried) {
                 e.target.dataset.fallbackTried = '1'
-                e.target.src = 'static/国际课程中心logo2_裁切.png'
+                e.target.src = 'static/TYICC午间悦听logo_V1.0_画板 1.png'
               }
             }}
           />
@@ -454,16 +666,22 @@ export default function Workflow({ networkOk, ffmpegOk }) {
               step={STEPS[currentStep]}
               stepIndex={currentStep}
               file={currentKey === 'music' ? null : stepFiles[currentKey]}
+              bgm={bgmTracks[currentKey] || null}
               musicFiles={currentKey === 'music' ? (stepFiles.music || []) : []}
               isSkipped={skippedSteps.has(currentKey)}
               loudnessEnabled={loudnessEnabled}
               ffmpegOk={ffmpegOk}
               networkOk={networkOk}
-              onSetFile={setStepFile}
+              onSetFile={setStepFileWithBgmCheck}
               onRemoveFile={removeStepFile}
               onLocalFile={handleLocalFile}
               onBilibiliDownload={handleBilibiliDownload}
               onUsePreset={handleUsePreset}
+              onSelectBgmLocal={onSelectBgmLocal}
+              onSelectBgmBilibili={onSelectBgmBilibili}
+              onRemoveBgm={onRemoveBgm}
+              onUpdateBgmSegment={onUpdateBgmSegment}
+              onUpdateBgmVolume={onUpdateBgmVolume}
               onAddMusicFile={handleAddMusicFile}
               onDownloadMusicBilibili={handleDownloadMusicBilibili}
               onRemoveMusicFile={handleRemoveMusicFile}
@@ -515,6 +733,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
                 ) : (
                   <ComposePanel
                     stepFiles={stepFiles}
+                    bgmTracks={bgmTracks}
                     skippedSteps={skippedSteps}
                     loudnessEnabled={loudnessEnabled}
                     ffmpegOk={ffmpegOk}

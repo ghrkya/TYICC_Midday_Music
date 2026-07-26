@@ -222,7 +222,7 @@ function createWindow() {
     minHeight: 600,
     frame: true,
     title: 'TYICC午间悦听制作器',
-    icon: getStaticPath('国际课程中心logo2_裁切.png'),
+    icon: getStaticPath('TYICC午间悦听logo_V1.0_画板 1.png'),
     webPreferences: {
       // 编译后 preload 在 dist-electron/ 下，用 __dirname 同时兼容 dev / prod
       preload: path.join(__dirname, 'index.js'),
@@ -289,8 +289,8 @@ ipcMain.handle('download-yt-dlp', async () => {
   const downloadUrls = [
     `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`,
     `https://github.moeyy.xyz/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`,
-    `https://ghproxy.net/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`
-    `https://gh-proxy.com/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`
+    `https://ghproxy.net/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`,
+    `https://gh-proxy.com/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`,
     `https://ghproxy.homeboyc.cn/https://github.com/yt-dlp/yt-dlp/releases/latest/download/${filename}`
   ]
 
@@ -525,6 +525,40 @@ function httpGetBuffer(url, headers = {}, timeout = 20000, redirectCount = 0) {
 async function downloadFile(url, filePath, headers = {}) {
   const data = await httpGetBuffer(url, headers, 45000)
   fs.writeFileSync(filePath, data)
+}
+
+function parseDurationFromFfmpegOutput(text) {
+  const match = String(text || '').match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i)
+  if (!match) return null
+  const h = Number(match[1] || 0)
+  const m = Number(match[2] || 0)
+  const s = Number(match[3] || 0)
+  return h * 3600 + m * 60 + s
+}
+
+async function getAudioDurationSeconds(filePath) {
+  const ffPath = getFfmpegPath()
+  if (!ffPath || !fs.existsSync(ffPath)) {
+    throw new Error('FFmpeg不可用，无法读取音频时长')
+  }
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw new Error('文件不存在，无法读取音频时长')
+  }
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffPath, ['-i', filePath])
+    let stderr = ''
+    proc.stderr.on('data', (d) => { stderr += d.toString() })
+    proc.on('error', reject)
+    proc.on('close', () => {
+      const duration = parseDurationFromFfmpegOutput(stderr)
+      if (duration == null || Number.isNaN(duration)) {
+        reject(new Error('无法解析音频时长'))
+        return
+      }
+      resolve(duration)
+    })
+  })
 }
 
 const WBI_MIXIN_KEY_ENC_TAB = [
@@ -1060,6 +1094,71 @@ ipcMain.handle('normalize-loudness', async (event, { inputPath, outputPath, targ
   })
 })
 
+ipcMain.handle('get-audio-duration', async (event, { filePath }) => {
+  try {
+    const duration = await getAudioDurationSeconds(filePath)
+    return { success: true, duration }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('mix-voice-with-bgm', async (event, {
+  voicePath,
+  bgmPath,
+  startSec = 0,
+  durationSec,
+  bgmVolume = 0.501187,
+  outputPath
+}) => {
+  try {
+    const ffPath = getFfmpegPath()
+    if (!ffPath || !fs.existsSync(ffPath)) {
+      return { success: false, message: 'FFmpeg不可用' }
+    }
+    if (!voicePath || !fs.existsSync(voicePath)) {
+      return { success: false, message: '口播文件不存在' }
+    }
+    if (!bgmPath || !fs.existsSync(bgmPath)) {
+      return { success: false, message: '背景音乐文件不存在' }
+    }
+
+    const voiceDuration = Number(durationSec) > 0 ? Number(durationSec) : await getAudioDurationSeconds(voicePath)
+    const bgmDuration = await getAudioDurationSeconds(bgmPath)
+    const start = Math.max(0, Number(startSec) || 0)
+    if (start + voiceDuration > bgmDuration + 0.01) {
+      return { success: false, message: '背景音乐可用时长不足，请重新选择时段' }
+    }
+
+    ensureDir(path.dirname(outputPath))
+    const safeVol = Math.max(0, Math.min(1, Number(bgmVolume) || 0.501187))
+    const filter = `[1:a]atrim=start=${start.toFixed(3)}:duration=${voiceDuration.toFixed(3)},asetpts=PTS-STARTPTS,volume=${safeVol}[bgm];[0:a]asetpts=PTS-STARTPTS[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[mix]`
+
+    return await new Promise((resolve) => {
+      const proc = spawn(ffPath, [
+        '-i', voicePath,
+        '-i', bgmPath,
+        '-filter_complex', filter,
+        '-map', '[mix]',
+        '-ar', '48000',
+        '-ac', '2',
+        '-c:a', 'pcm_s16le',
+        '-y', outputPath
+      ])
+
+      let errorMsg = ''
+      proc.stderr.on('data', (d) => { errorMsg += d.toString() })
+      proc.on('error', (err) => resolve({ success: false, message: err.message }))
+      proc.on('close', (code) => {
+        if (code === 0) resolve({ success: true, outputPath, duration: voiceDuration })
+        else resolve({ success: false, message: (errorMsg || '混音失败').split('\n').slice(-6).join('\n') })
+      })
+    })
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
 /**
  * 转换为统一WAV格式（PCM 16bit 48kHz）
  */
@@ -1086,13 +1185,71 @@ ipcMain.handle('convert-to-wav', async (event, { inputPath, outputPath }) => {
   })
 })
 
+async function readToolVersion(binPath, args, fallback = 'unknown') {
+  if (!binPath || !fs.existsSync(binPath)) return fallback
+  return await new Promise((resolve) => {
+    const proc = spawn(binPath, args)
+    let output = ''
+    proc.stdout.on('data', (data) => { output += data.toString() })
+    proc.stderr.on('data', (data) => { output += data.toString() })
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        resolve(fallback)
+        return
+      }
+      const firstLine = (output || '').split('\n').map(s => s.trim()).find(Boolean) || ''
+      resolve(firstLine || fallback)
+    })
+    proc.on('error', () => resolve(fallback))
+  })
+}
+
+async function buildExportTags(metadata) {
+  const studentName = String(metadata?.studentName || '').trim() || '未知'
+  const programDate = String(metadata?.programDate || '').trim() || '未知'
+  const title = `TYICC午间悦听-${programDate}`
+
+  const osLabel = isWin ? 'Windows' : (isMac ? 'Mac' : process.platform)
+  const osVersion = os.release() || 'unknown'
+  const appVersion = app.getVersion ? app.getVersion() : 'unknown'
+  const ffVersionRaw = await readToolVersion(getFfmpegPath(), ['-version'])
+  const ytVersionRaw = await readToolVersion(getYtDlpPath(), ['--version'])
+  const ffVersion = ffVersionRaw.replace(/^ffmpeg\s+version\s+/i, '') || 'unknown'
+  const ytVersion = ytVersionRaw || 'unknown'
+
+  const tsse = `${osLabel} ${osVersion}; app ${appVersion}; ffmpeg ${ffVersion}; yt-dlp ${ytVersion}`
+
+  return {
+    TIT2: title,
+    TPE1: studentName,
+    TALB: 'TYICC午间悦听',
+    TPUB: 'TYICC广播站',
+    TENC: 'TYICC午间悦听制作器',
+    TSSE: tsse,
+    TCON: '广播',
+    title,
+    artist: studentName,
+    album: 'TYICC午间悦听',
+    publisher: 'TYICC广播站',
+    encoded_by: 'TYICC午间悦听制作器',
+    encoder_settings: tsse,
+    genre: '广播'
+  }
+}
+
 /**
  * 拼接音频文件 - concat demuxer
  */
-ipcMain.handle('concatenate-audio', async (event, { fileList, outputPath }) => {
+ipcMain.handle('concatenate-audio', async (event, { fileList, outputPath, jobId, metadata }) => {
   const ffPath = getFfmpegPath()
   if (!ffPath) return { success: false, message: 'FFmpeg不可用' }
   if (!fileList || fileList.length === 0) return { success: false, message: '文件列表为空' }
+
+  let totalDuration = 0
+  try {
+    const durations = await Promise.all(fileList.map((f) => getAudioDurationSeconds(f).catch(() => 0)))
+    totalDuration = durations.reduce((sum, d) => sum + (Number(d) || 0), 0)
+  } catch {}
 
   // 输出格式判断
   const ext = path.extname(outputPath).toLowerCase()
@@ -1105,19 +1262,66 @@ ipcMain.handle('concatenate-audio', async (event, { fileList, outputPath }) => {
   const inputs = fileList.flatMap(f => ['-i', f])
   const filterInputLabels = fileList.map((_, i) => `[${i}:a]`).join('')
   const filterStr = `${filterInputLabels}concat=n=${fileList.length}:v=0:a=1[aout]`
+  const exportTags = await buildExportTags(metadata)
+
+  const metadataArgs = ['-map_metadata', '-1']
+  Object.entries(exportTags).forEach(([k, v]) => {
+    if (v === undefined || v === null) return
+    metadataArgs.push('-metadata', `${k}=${String(v)}`)
+  })
+
+  const id3Args = ext === '.wav' ? [] : ['-id3v2_version', '3', '-write_id3v1', '1']
 
   return new Promise((resolve) => {
     const proc = spawn(ffPath, [
       ...inputs,
       '-filter_complex', filterStr,
       '-map', '[aout]',
+      ...metadataArgs,
+      ...id3Args,
+      '-progress', 'pipe:1',
+      '-nostats',
       ...codecArgs,
       '-y', outputPath
     ])
 
     let errorMsg = ''
+    let progressBuf = ''
+    let lastSentPercent = -1
+
+    const sendProgress = (percent) => {
+      if (!event || !event.sender || !jobId) return
+      const safePercent = Math.max(0, Math.min(100, Number(percent) || 0))
+      if (safePercent <= lastSentPercent && safePercent < 100) return
+      lastSentPercent = safePercent
+      event.sender.send('concatenate-audio-progress', {
+        jobId,
+        percent: safePercent,
+        totalDuration
+      })
+    }
+
+    sendProgress(0)
+
+    proc.stdout.on('data', (data) => {
+      progressBuf += data.toString()
+      const lines = progressBuf.split(/\r?\n/)
+      progressBuf = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        const [key, value] = trimmed.split('=')
+        if (key === 'out_time_ms' && totalDuration > 0) {
+          const outSec = (Number(value) || 0) / 1000000
+          const percent = (outSec / totalDuration) * 100
+          sendProgress(percent)
+        }
+      }
+    })
+
     proc.stderr.on('data', (data) => { errorMsg += data.toString() })
     proc.on('close', (code) => {
+      if (code === 0) sendProgress(100)
       resolve({
         success: code === 0,
         message: code === 0 ? '拼接完成' : (errorMsg || '').split('\n').slice(-5).join('\n') || '拼接失败'

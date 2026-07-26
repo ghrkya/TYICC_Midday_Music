@@ -25,9 +25,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ========== 音频处理 ==========
   analyzeLoudness: (options) => ipcRenderer.invoke('analyze-loudness', options),
+  getAudioDuration: (options) => ipcRenderer.invoke('get-audio-duration', options),
   normalizeLoudness: (options) => ipcRenderer.invoke('normalize-loudness', options),
+  mixVoiceWithBgm: (options) => ipcRenderer.invoke('mix-voice-with-bgm', options),
   convertToWav: (options) => ipcRenderer.invoke('convert-to-wav', options),
   concatenateAudio: (options) => ipcRenderer.invoke('concatenate-audio', options),
+  onConcatenateProgress: (callback) => {
+    const channel = 'concatenate-audio-progress'
+    const listener = (_event, payload) => {
+      if (typeof callback === 'function') callback(payload)
+    }
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
 
   // ========== 文件对话框 ==========
   openFileDialog: (options) => ipcRenderer.invoke('open-file-dialog', options),

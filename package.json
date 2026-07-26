@@ -1,6 +1,6 @@
 {
   "name": "tyicc-midday-music",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "TYICC午间悦听 - 校园广播站智能音频工作流系统",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -54,11 +54,11 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "static/国际课程中心logo2_裁切.png"
+      "icon": "static/TYICC午间悦听logo_V1.0_画板 1.png"
     },
     "mac": {
       "target": "dmg",
-      "icon": "static/国际课程中心logo2_裁切.png"
+      "icon": "static/TYICC午间悦听logo_V1.0_画板 1.png"
     },
     "nsis": {
       "oneClick": false,

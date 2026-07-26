@@ -1,0 +1,109 @@
+name: Release Installers
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (e.g. v3.0.1)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark this release as pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Build frontend + Electron
+        run: npm run build
+
+      - name: Build Windows installer
+        run: npx electron-builder --win --x64 --publish never
+        env:
+          CI: "false"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TYICC-Midday-Music-Windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+
+  macos:
+    runs-on: macos-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Ensure mac yt-dlp executable bit
+        run: chmod +x bin/mac/yt-dlp_macos
+
+      - name: Build frontend + Electron
+        run: npm run build
+
+      - name: Build macOS installer
+        run: npx electron-builder --mac --x64 --publish never
+        env:
+          CI: "false"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TYICC-Midday-Music-macOS
+          path: |
+            dist/*.dmg
+            dist/*.blockmap
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+      IS_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          prerelease: ${{ env.IS_PRERELEASE }}
+          files: |
+            release-assets/*.exe
+            release-assets/*.dmg
+            release-assets/*.blockmap
