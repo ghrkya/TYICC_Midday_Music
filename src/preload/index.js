@@ -48,9 +48,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTempDir: () => ipcRenderer.invoke('get-temp-dir'),
   getCacheDir: () => ipcRenderer.invoke('get-cache-dir'),
   cleanupCache: () => ipcRenderer.invoke('cleanup-cache'),
+  getStorageCacheUsage: () => ipcRenderer.invoke('get-storage-cache-usage'),
+  clearStorageCache: () => ipcRenderer.invoke('clear-storage-cache'),
+  getMusicLibraryInfo: () => ipcRenderer.invoke('get-music-library-info'),
+  listMusicLibraryTracks: () => ipcRenderer.invoke('list-music-library-tracks'),
+  importMusicLibraryPackage: () => ipcRenderer.invoke('import-music-library-package'),
+  clearMusicLibrary: () => ipcRenderer.invoke('clear-music-library'),
+  createMusicLibraryPackage: (options) => ipcRenderer.invoke('create-music-library-package', options),
 
   // ========== 预设音频 ==========
   getPresetOpening: () => ipcRenderer.invoke('get-preset-opening'),
+  getContributorText: () => ipcRenderer.invoke('get-contributor-text'),
 
   // ========== 录音 ==========
   saveRecordingFile: (options) => ipcRenderer.invoke('save-recording-file', options),
@@ -58,5 +66,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ========== 应用信息 ==========
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
-  openFileLocation: (options) => ipcRenderer.invoke('open-file-location', options)
+  openFileLocation: (options) => ipcRenderer.invoke('open-file-location', options),
+  checkGithubReleaseUpdate: () => ipcRenderer.invoke('check-github-release-update'),
+  openExternalUrl: (options) => ipcRenderer.invoke('open-external-url', options)
 })

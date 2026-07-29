@@ -29,3 +29,7 @@ AI_md
 /ttmpdownload
 /src/main/usrdata
 /src/main/usrdata/electron
+
+# 其他
+/歌单打包
+password.txt

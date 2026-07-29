@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react'
-import { Button, message, Modal, Tooltip, Select, Input } from 'antd'
+import { Button, message, Modal, Tooltip, Select, Input, Checkbox } from 'antd'
 import {
   FolderOpenOutlined,
   DownloadOutlined,
@@ -24,6 +24,7 @@ import {
 import BilibiliDownloader from './BilibiliDownloader'
 import AudioRecorder from './AudioRecorder'
 import BgmSegmentModal from './BgmSegmentModal'
+import MusicLibraryModal from './MusicLibraryModal'
 
 const BGM_VOLUME_OPTIONS = [
   { label: '高（-3dB）', value: -3 },
@@ -87,6 +88,9 @@ export default function StepPanel({
   stepIndex,
   file,
   bgm,
+  previousBgmStepKey,
+  canInheritPreviousBgm,
+  continuePlaybackEnabled,
   musicFiles,
   loudnessEnabled,
   ffmpegOk,
@@ -98,9 +102,13 @@ export default function StepPanel({
   onUsePreset,
   onSelectBgmLocal,
   onSelectBgmBilibili,
+  onSelectBgmFromLibrary,
   onRemoveBgm,
   onUpdateBgmSegment,
   onUpdateBgmVolume,
+  onUsePreviousBgmContinue,
+  onUsePreviousBgmSameAudio,
+  onToggleContinuePlayback,
   onAddMusicFile,
   onDownloadMusicBilibili,
   onRemoveMusicFile,
@@ -115,6 +123,7 @@ export default function StepPanel({
   // 显示录音面板
   const [showRecorder, setShowRecorder] = React.useState(false)
   const [showSegmentModal, setShowSegmentModal] = React.useState(false)
+  const [showMusicLibraryModal, setShowMusicLibraryModal] = React.useState(false)
   const [forceCustomVolumeInput, setForceCustomVolumeInput] = React.useState(false)
   const [customVolumeInput, setCustomVolumeInput] = React.useState('')
 
@@ -236,6 +245,14 @@ export default function StepPanel({
     setShowSegmentModal(true)
   }
 
+  const openMusicLibraryModal = () => {
+    const audioEls = document.querySelectorAll('audio')
+    audioEls.forEach((el) => {
+      try { el.pause() } catch {}
+    })
+    setShowMusicLibraryModal(true)
+  }
+
   // 处理录音完成
   const handleRecordingComplete = (audioBlob, recordingFilePath, duration) => {
     const fileName = recordingFilePath
@@ -257,6 +274,10 @@ export default function StepPanel({
   }
 
   const canUseBgm = step.key === 'greeting' || step.key === 'transition' || step.key === 'ending'
+  const isContinueMode = !!continuePlaybackEnabled && !!canInheritPreviousBgm
+  const previousStepLabel = previousBgmStepKey === 'greeting'
+    ? '开场语'
+    : previousBgmStepKey === 'transition' ? '转场' : '上一步'
 
   const currentVolumeDb = (typeof bgm?.volumeDb === 'number') ? bgm.volumeDb : DEFAULT_BGM_VOLUME_DB
   const isCurrentVolumePreset = PRESET_BGM_DB_VALUES.has(currentVolumeDb)
@@ -545,6 +566,8 @@ export default function StepPanel({
                 <div className="selected-file-detail">
                   {bgm.source === 'local' && '背景音乐（本地）'}
                   {bgm.source === 'bilibili' && `背景音乐（B站 ${bgm.bvId || ''}）`}
+                  {bgm.source === 'library' && `背景音乐（音乐库${bgm.artist ? ` / ${bgm.artist}` : ''}）`}
+                  {bgm.source === 'previous' && `背景音乐（沿用${previousStepLabel}）`}
                   {bgm.size ? ` · ${formatFileSize(bgm.size)}` : ''}
                   {typeof bgm.volumeDb === 'number' ? ` · 音量 ${bgm.volumeDb}dB` : ` · 音量 ${DEFAULT_BGM_VOLUME_DB}dB`}
                   {typeof bgm.startTime === 'number' && typeof bgm.endTime === 'number'
@@ -553,8 +576,8 @@ export default function StepPanel({
                 </div>
               </div>
               <div className="selected-file-actions" style={{ display: 'flex', gap: 6 }}>
-                <Button size="small" onClick={openSegmentModal}>选择时段</Button>
-                <Button size="small" icon={<DeleteOutlined />} onClick={() => onRemoveBgm(step.key)} danger />
+                <Button size="small" onClick={openSegmentModal} disabled={isContinueMode}>选择时段</Button>
+                <Button size="small" icon={<DeleteOutlined />} onClick={() => onRemoveBgm(step.key)} danger disabled={isContinueMode} />
               </div>
             </div>
           )}
@@ -573,6 +596,21 @@ export default function StepPanel({
               }}
             />
           )}
+
+          {canUseBgm && (
+            <MusicLibraryModal
+              open={showMusicLibraryModal}
+              voiceFileReady={!!file}
+              onCancel={() => setShowMusicLibraryModal(false)}
+              onSelectTrack={async (track) => {
+                const ok = await onSelectBgmFromLibrary(step.key, track)
+                if (ok) {
+                  setShowMusicLibraryModal(false)
+                }
+                return ok
+              }}
+            />
+          )}
         </>
       )}
 
@@ -585,6 +623,25 @@ export default function StepPanel({
           borderRadius: 10,
           background: '#FBF9FF'
         }}>
+          {canInheritPreviousBgm && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              <Checkbox
+                checked={!!continuePlaybackEnabled}
+                onChange={(e) => onToggleContinuePlayback(step.key, e.target.checked)}
+                disabled={!file}
+              >
+                延续上步播放（联动转场与结语）
+              </Checkbox>
+            </div>
+          )}
+
+          {isContinueMode && (
+            <div style={{ marginBottom: 8, fontSize: 12, color: '#7a7a7a' }}>
+              已启用延续播放：本步骤将自动衔接上一步背景音乐，以下设置已锁定。
+            </div>
+          )}
+
+          <div style={{ opacity: isContinueMode ? 0.45 : 1, pointerEvents: isContinueMode ? 'none' : 'auto' }}>
           {showBgmBilibili && (
             <div className="bilibili-downloader" style={{ marginBottom: 10 }}>
               <BilibiliDownloader
@@ -601,6 +658,16 @@ export default function StepPanel({
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Button size="small" onClick={() => onSelectBgmLocal(step.key)} disabled={!file}>选择本地背景音乐</Button>
             <Button size="small" onClick={() => setShowBgmBilibili(true)} disabled={!file}>B站下载背景音乐</Button>
+            <Button size="small" onClick={openMusicLibraryModal} disabled={!file}>从自带音乐库中选择音乐</Button>
+            {canInheritPreviousBgm && (
+              <Button
+                size="small"
+                onClick={() => onUsePreviousBgmSameAudio(step.key)}
+                disabled={!file || !!continuePlaybackEnabled}
+              >
+                使用上调口播背景音乐文件
+              </Button>
+            )}
           </div>
           <div style={{ marginTop: 8 }}>
             {renderBgmVolumeControl()}
@@ -608,6 +675,7 @@ export default function StepPanel({
           {!file && (
             <div style={{ marginTop: 6, fontSize: 12, color: '#999' }}>请先准备口播音频，再添加背景音乐。</div>
           )}
+          </div>
         </div>
       )}
     </div>

@@ -22,6 +22,7 @@ const crypto = require('crypto')
 const { spawn } = require('child_process')
 const http = require('http')
 const https = require('https')
+const { createMusicLibraryManager } = require('./musicLibrary')
 
 // ============================================================
 // FFmpeg自动安装器 - npm包提供，跨平台兼容
@@ -88,6 +89,10 @@ const BIN_DIR = path.join(DATA_DIR, 'bin')                       // 存放yt-dlp
 const TEMP_DIR = path.join(DATA_DIR, 'temp')                     // 临时处理文件
 const DOWNLOAD_DIR = path.join(APP_DIR, 'ttmpdownload')          // 下载输出目录
 const CACHE_DIR = path.join(DATA_DIR, 'cache')                   // B站下载缓存
+
+if (isWin) {
+  app.setAppUserModelId(isDev ? 'com.tyicc.midday-music.dev' : 'com.tyicc.midday-music')
+}
 
 // 应用启动前就重定向 Electron 存储路径，避免 Chromium 在 Roaming 写缓存
 const ELECTRON_DATA_DIR = path.join(APP_DIR, 'usrdata', 'electron')
@@ -180,6 +185,10 @@ function getStaticPath(filename) {
   return candidates.find(Boolean) || filename
 }
 
+function getAppIconPath() {
+  return getStaticPath('TYICC午间悦听logo_V1.5_画板 1.png')
+}
+
 /**
  * 获取预设开场音频
  */
@@ -197,6 +206,19 @@ ipcMain.handle('get-preset-opening', async () => {
     }
   } catch {}
   return { success: false, message: '预设文件不存在' }
+})
+
+ipcMain.handle('get-contributor-text', async () => {
+  try {
+    const contributorPath = getStaticPath('contributor.txt')
+    if (!contributorPath || !fs.existsSync(contributorPath)) {
+      return { success: false, message: '未找到贡献者文件' }
+    }
+    const text = fs.readFileSync(contributorPath, 'utf8')
+    return { success: true, text }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
 })
 
 /**
@@ -222,7 +244,7 @@ function createWindow() {
     minHeight: 600,
     frame: true,
     title: 'TYICC午间悦听制作器',
-    icon: getStaticPath('TYICC午间悦听logo_V1.0_画板 1.png'),
+    icon: getAppIconPath(),
     webPreferences: {
       // 编译后 preload 在 dist-electron/ 下，用 __dirname 同时兼容 dev / prod
       preload: path.join(__dirname, 'index.js'),
@@ -560,6 +582,15 @@ async function getAudioDurationSeconds(filePath) {
     })
   })
 }
+
+const musicLibraryManager = createMusicLibraryManager({
+  dataDir: DATA_DIR,
+  ensureDir,
+  dialog,
+  getMainWindow: () => mainWindow,
+  getAudioDurationSeconds,
+  getAppVersion: () => app.getVersion()
+})
 
 const WBI_MIXIN_KEY_ENC_TAB = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
@@ -1103,6 +1134,47 @@ ipcMain.handle('get-audio-duration', async (event, { filePath }) => {
   }
 })
 
+ipcMain.handle('get-music-library-info', async () => {
+  try {
+    return await musicLibraryManager.getLibraryInfo()
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('list-music-library-tracks', async () => {
+  try {
+    const tracks = await musicLibraryManager.listTracks()
+    return { success: true, tracks }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('import-music-library-package', async () => {
+  try {
+    return await musicLibraryManager.importPackageFromDialog()
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('clear-music-library', async () => {
+  try {
+    return await musicLibraryManager.clearLibrary()
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('create-music-library-package', async (event, spec) => {
+  try {
+    return await musicLibraryManager.createPackageFromSpec(spec)
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
 ipcMain.handle('mix-voice-with-bgm', async (event, {
   voicePath,
   bgmPath,
@@ -1342,8 +1414,12 @@ ipcMain.handle('open-file-dialog', async (event, options) => {
     { name: '音频文件', extensions: ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'] },
     { name: '所有文件', extensions: ['*'] }
   ]
+  const properties = options && Array.isArray(options.properties) && options.properties.length > 0
+    ? options.properties
+    : ['openFile']
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
+    title: options && options.title ? options.title : undefined,
+    properties,
     filters
   })
   return result
@@ -1398,6 +1474,136 @@ ipcMain.handle('cleanup-cache', async () => {
       } catch {}
     })
     return { success: true, cleaned }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+function getDirectoryUsageBytes(dirPath) {
+  if (!dirPath || !fs.existsSync(dirPath)) return 0
+  let total = 0
+  const entries = fs.readdirSync(dirPath)
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry)
+    try {
+      const stat = fs.statSync(fullPath)
+      if (stat.isFile()) {
+        total += stat.size
+      } else if (stat.isDirectory()) {
+        total += getDirectoryUsageBytes(fullPath)
+      }
+    } catch {}
+  }
+  return total
+}
+
+function clearDirectoryChildren(dirPath) {
+  if (!dirPath || !fs.existsSync(dirPath)) return 0
+  let removed = 0
+  const entries = fs.readdirSync(dirPath)
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry)
+    try {
+      fs.rmSync(fullPath, { recursive: true, force: true })
+      removed++
+    } catch {}
+  }
+  return removed
+}
+
+function normalizeVersionText(input) {
+  return String(input || '').trim().replace(/^v/i, '')
+}
+
+function compareSemverLike(a, b) {
+  const pa = normalizeVersionText(a).split('.').map((v) => Number.parseInt(v, 10) || 0)
+  const pb = normalizeVersionText(b).split('.').map((v) => Number.parseInt(v, 10) || 0)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const av = pa[i] || 0
+    const bv = pb[i] || 0
+    if (av > bv) return 1
+    if (av < bv) return -1
+  }
+  return 0
+}
+
+ipcMain.handle('check-github-release-update', async () => {
+  const currentVersion = app.getVersion()
+  const apiUrl = 'https://api.github.com/repos/ghrkya/TYICC_Midday_Music/releases/latest'
+  try {
+    const body = await httpGetBuffer(apiUrl, {
+      'User-Agent': 'TYICC-Midday-Music-Updater',
+      'Accept': 'application/vnd.github+json'
+    }, 4500)
+    const payload = JSON.parse(body.toString('utf8'))
+    const latestVersionRaw = String(payload?.tag_name || payload?.name || '').trim()
+    if (!latestVersionRaw) {
+      return { success: false, message: '未获取到远程版本号', currentVersion }
+    }
+
+    const hasUpdate = compareSemverLike(latestVersionRaw, currentVersion) > 0
+    return {
+      success: true,
+      hasUpdate,
+      currentVersion,
+      latestVersion: normalizeVersionText(latestVersionRaw),
+      latestVersionRaw,
+      releaseUrl: String(payload?.html_url || 'https://github.com/ghrkya/TYICC_Midday_Music/releases/latest'),
+      publishedAt: String(payload?.published_at || '')
+    }
+  } catch (err) {
+    const text = String(err?.message || '')
+    const timedOut = /timeout|超时/i.test(text)
+    return {
+      success: false,
+      timedOut,
+      currentVersion,
+      message: timedOut ? '检查更新请求超时，已跳过' : text || '检查更新失败'
+    }
+  }
+})
+
+ipcMain.handle('get-storage-cache-usage', async () => {
+  try {
+    ensureDir(DOWNLOAD_DIR)
+    ensureDir(TEMP_DIR)
+    const downloadBytes = getDirectoryUsageBytes(DOWNLOAD_DIR)
+    const recordingTempBytes = getDirectoryUsageBytes(TEMP_DIR)
+    const totalBytes = downloadBytes + recordingTempBytes
+    return {
+      success: true,
+      totalBytes,
+      downloadBytes,
+      recordingTempBytes
+    }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('clear-storage-cache', async () => {
+  try {
+    ensureDir(DOWNLOAD_DIR)
+    ensureDir(TEMP_DIR)
+
+    const beforeDownloadBytes = getDirectoryUsageBytes(DOWNLOAD_DIR)
+    const beforeRecordingTempBytes = getDirectoryUsageBytes(TEMP_DIR)
+    const beforeTotalBytes = beforeDownloadBytes + beforeRecordingTempBytes
+
+    const removedDownloadEntries = clearDirectoryChildren(DOWNLOAD_DIR)
+    const removedRecordingEntries = clearDirectoryChildren(TEMP_DIR)
+
+    return {
+      success: true,
+      clearedBytes: beforeTotalBytes,
+      removedEntries: removedDownloadEntries + removedRecordingEntries,
+      before: {
+        totalBytes: beforeTotalBytes,
+        downloadBytes: beforeDownloadBytes,
+        recordingTempBytes: beforeRecordingTempBytes
+      }
+    }
   } catch (err) {
     return { success: false, message: err.message }
   }
@@ -1473,6 +1679,19 @@ ipcMain.handle('open-file-location', async (event, { filePath }) => {
       return { success: false, message: '文件不存在' }
     }
     electron.shell.showItemInFolder(filePath)
+    return { success: true }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('open-external-url', async (event, { url }) => {
+  try {
+    const target = String(url || '').trim()
+    if (!/^https?:\/\//i.test(target)) {
+      return { success: false, message: '仅允许打开 http/https 链接' }
+    }
+    await electron.shell.openExternal(target)
     return { success: true }
   } catch (err) {
     return { success: false, message: err.message }

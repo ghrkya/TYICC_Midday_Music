@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "libraryId": "tyicc-bgm-library",
+  "libraryName": "TYICC 午间悦听背景音乐库",
+  "libraryVersion": "0.0.0",
+  "minAppVersion": "3.0.0",
+  "description": "示例音乐库清单文件。运行时真实数据会写入 usrdata/music-library/library.json。",
+  "updatedAt": "1970-01-01T00:00:00.000Z",
+  "contributors": [],
+  "packagesApplied": [],
+  "tracks": [],
+  "trackCount": 0,
+  "packageFormat": {
+    "schemaVersion": 1,
+    "packageFile": "package.json",
+    "mediaRoot": "files/"
+  }
+}

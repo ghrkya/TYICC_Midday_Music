@@ -19,6 +19,30 @@ export default function App() {
   const [ytdlpOk, setYtdlpOk] = useState(false)
   const loadingRef = useRef(null)
 
+  async function checkReleaseUpdateOnStartup() {
+    if (!window.electronAPI?.checkGithubReleaseUpdate) return
+    try {
+      const result = await window.electronAPI.checkGithubReleaseUpdate()
+      if (!result?.success || !result.hasUpdate) return
+
+      const latestVersion = result.latestVersion || result.latestVersionRaw || '未知版本'
+      Modal.confirm({
+        title: '检测到新版本',
+        content: `检测到新的更新：版本${latestVersion}，是否更新？`,
+        okText: '去更新',
+        cancelText: '稍后再说',
+        centered: true,
+        onOk: async () => {
+          if (window.electronAPI?.openExternalUrl) {
+            await window.electronAPI.openExternalUrl({
+              url: result.releaseUrl || 'https://github.com/ghrkya/TYICC_Midday_Music/releases/latest'
+            })
+          }
+        }
+      })
+    } catch {}
+  }
+
   // 启动加载流程
   useEffect(() => {
     const initSequence = async () => {
@@ -82,12 +106,18 @@ export default function App() {
         await sleep(500)
 
         setLoading(false)
+        setTimeout(() => {
+          checkReleaseUpdateOnStartup().catch(() => {})
+        }, 250)
       } catch (err) {
         console.error('初始化失败:', err)
         setLoadingStatus('加载出错，请重启应用')
         // 即使出错也允许进入主界面
         await sleep(1000)
         setLoading(false)
+        setTimeout(() => {
+          checkReleaseUpdateOnStartup().catch(() => {})
+        }, 250)
       }
     }
 

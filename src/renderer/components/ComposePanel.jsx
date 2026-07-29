@@ -181,7 +181,14 @@ export default function ComposePanel({ stepFiles, bgmTracks, skippedSteps, loudn
         }
         const voiceDuration = Number(durRes.duration || 0)
         const startSec = Number(bgm.startTime || 0)
-        const volumeDb = (typeof bgm.volumeDb === 'number') ? bgm.volumeDb : DEFAULT_BGM_VOLUME_DB
+        let volumeDb = (typeof bgm.volumeDb === 'number') ? bgm.volumeDb : DEFAULT_BGM_VOLUME_DB
+        if (bgm.linkMode === 'continueFromPrevious') {
+          const rootKey = bgm.rootLinkedFromStepKey || bgm.linkedFromStepKey
+          const rootBgm = rootKey ? (bgmTracks && bgmTracks[rootKey]) : null
+          if (typeof rootBgm?.volumeDb === 'number') {
+            volumeDb = Number(rootBgm.volumeDb)
+          }
+        }
         const bgmVolume = dbToLinear(volumeDb)
 
         const mixOut = `${tempDir}/bgm_mix_${entry.key}_${i}.wav`

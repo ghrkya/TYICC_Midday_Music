@@ -10,6 +10,18 @@ import React from 'react'
 export default function SplashScreen({ progress, status, networkOk }) {
   return (
     <div className="splash-screen">
+      <div className="splash-background" aria-hidden="true">
+        <img
+          src="./static/开屏图.png"
+          alt=""
+          onError={(e) => {
+            if (!e.target.dataset.fallbackTried) {
+              e.target.dataset.fallbackTried = '1'
+              e.target.src = 'static/开屏图.png'
+            }
+          }}
+        />
+      </div>
       <div className="splash-content">
         {/* Logo区域 */}
         <div className="splash-logo">
