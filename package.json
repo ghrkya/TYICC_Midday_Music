@@ -1,6 +1,6 @@
 {
   "name": "tyicc-midday-music",
-  "version": "3.0.0",
+  "version": "0.0.0",
   "description": "TYICC午间悦听 - 校园广播站智能音频工作流系统",
   "main": "dist-electron/main.js",
   "scripts": {

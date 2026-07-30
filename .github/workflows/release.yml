@@ -31,6 +31,14 @@ jobs:
         with:
           node-version: 24
 
+      - name: Sync version from tag
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}'
+          $ver = $tag -replace '^v', ''
+          Write-Host "Setting package version to $ver (from tag $tag)"
+          npm version $ver --no-git-tag-version --allow-same-version
+
       - run: npm ci
 
       - name: Build frontend + Electron
@@ -59,6 +67,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      - name: Sync version from tag
+        run: |
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}"
+          VER="${TAG#v}"
+          echo "Setting package version to $VER (from tag $TAG)"
+          npm version "$VER" --no-git-tag-version --allow-same-version
 
       - run: npm ci
 

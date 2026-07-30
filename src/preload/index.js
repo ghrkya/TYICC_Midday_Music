@@ -68,5 +68,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   openFileLocation: (options) => ipcRenderer.invoke('open-file-location', options),
   checkGithubReleaseUpdate: () => ipcRenderer.invoke('check-github-release-update'),
+  downloadUpdateInstaller: (options) => ipcRenderer.invoke('download-update-installer', options),
+  onUpdateDownloadProgress: (callback) => {
+    const channel = 'update-download-progress'
+    const listener = (_event, payload) => {
+      if (typeof callback === 'function') callback(payload)
+    }
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
+  cancelUpdateDownload: () => ipcRenderer.invoke('cancel-update-download'),
+  runUpdateInstaller: (options) => ipcRenderer.invoke('run-update-installer', options),
   openExternalUrl: (options) => ipcRenderer.invoke('open-external-url', options)
 })

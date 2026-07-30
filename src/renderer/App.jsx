@@ -26,20 +26,185 @@ export default function App() {
       if (!result?.success || !result.hasUpdate) return
 
       const latestVersion = result.latestVersion || result.latestVersionRaw || '未知版本'
-      Modal.confirm({
-        title: '检测到新版本',
-        content: `检测到新的更新：版本${latestVersion}，是否更新？`,
-        okText: '去更新',
-        cancelText: '稍后再说',
+      const downloadUrl = result.downloadUrl || ''
+      const downloadName = result.downloadName || ''
+      const totalSizeMb = result.downloadSize > 0
+        ? (result.downloadSize / 1024 / 1024).toFixed(1)
+        : ''
+
+      if (!downloadUrl) {
+        Modal.confirm({
+          title: '检测到新版本',
+          content: `检测到新的更新：版本${latestVersion}，未找到自动下载安装包，是否前往下载页面？`,
+          okText: '去下载',
+          cancelText: '稍后再说',
+          centered: true,
+          onOk: async () => {
+            if (window.electronAPI?.openExternalUrl) {
+              await window.electronAPI.openExternalUrl({
+                url: result.releaseUrl || 'https://github.com/ghrkya/TYICC_Midday_Music/releases/latest'
+              })
+            }
+          }
+        })
+        return
+      }
+
+      let progressUnsub = null
+      let downloadCancelled = false
+
+      const modal = Modal.confirm({
+        title: '下载更新安装包',
+        icon: null,
+        width: 500,
         centered: true,
-        onOk: async () => {
-          if (window.electronAPI?.openExternalUrl) {
-            await window.electronAPI.openExternalUrl({
-              url: result.releaseUrl || 'https://github.com/ghrkya/TYICC_Midday_Music/releases/latest'
-            })
+        okText: '关闭',
+        cancelText: '取消下载',
+        cancelButtonProps: { danger: true },
+        onCancel: async () => {
+          downloadCancelled = true
+          if (progressUnsub) progressUnsub()
+          if (window.electronAPI?.cancelUpdateDownload) {
+            await window.electronAPI.cancelUpdateDownload()
+          }
+          modal.destroy()
+        },
+        content: (() => {
+          // 用函数返回动态内容，在回调里通过 DOM 操作更新
+          const container = document.createElement('div')
+          container.innerHTML = `
+            <div style="margin-bottom:12px;font-size:13px;color:#666">
+              版本 ${latestVersion}${totalSizeMb ? ` · ${totalSizeMb} MB` : ''}
+            </div>
+            <div style="margin-bottom:8px">
+              <div class="ant-progress ant-progress-line ant-progress-status-active" style="width:100%">
+                <div class="ant-progress-outer" style="width:100%">
+                  <div class="ant-progress-inner">
+                    <div class="ant-progress-bg" style="width:0%;height:8px;background:#6C63FF;border-radius:4px;transition:width 0.3s"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style="font-size:13px;color:#999" class="update-progress-text">正在连接 GitHub...</div>
+            <div style="margin-top:12px;padding:8px 10px;background:#FFFBE6;border:1px solid #FFE58F;border-radius:6px;font-size:12px;color:#AD6800">
+              ⚠️ 正在通过 GitHub 下载，可能需要特定网络环境。若长时间无进度请取消后检查网络。
+            </div>
+          `
+          return container
+        })()
+      })
+
+      // 更新弹窗内容的辅助函数
+      const updateModalContent = (htmlContent) => {
+        const bodyEl = document.querySelector('.ant-modal-confirm-body .ant-modal-confirm-content')
+        if (bodyEl) {
+          const inner = bodyEl.querySelector('div')
+          if (inner) {
+            inner.innerHTML = htmlContent
           }
         }
-      })
+      }
+
+      const formatSpeed = (bytesPerSec) => {
+        if (!bytesPerSec || bytesPerSec < 1024) return `${Math.round(bytesPerSec || 0)} B/s`
+        if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`
+        return `${(bytesPerSec / 1024 / 1024).toFixed(1)} MB/s`
+      }
+
+      const formatBytes = (bytes) => {
+        if (bytes < 1024) return `${bytes} B`
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+        return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+      }
+
+      try {
+        progressUnsub = window.electronAPI.onUpdateDownloadProgress((payload) => {
+          if (downloadCancelled) return
+
+          const phase = payload?.phase || ''
+          const percent = Math.max(0, Math.min(100, Number(payload?.percent || 0)))
+          const speed = Number(payload?.speed || 0)
+          const received = Number(payload?.receivedBytes || 0)
+          const total = Number(payload?.totalBytes || 0)
+
+          let statusText = ''
+          if (phase === 'connecting') {
+            statusText = '正在连接 GitHub...'
+          } else if (phase === 'writing') {
+            statusText = '下载完成，正在保存文件...'
+          } else {
+            const recvStr = formatBytes(received)
+            const totalStr = total > 0 ? ` / ${formatBytes(total)}` : ''
+            const speedStr = formatSpeed(speed)
+            statusText = `已下载 ${recvStr}${totalStr} · ${speedStr}`
+          }
+
+          const progressColor = percent === 100 ? '#52C41A' : '#6C63FF'
+
+          updateModalContent(`
+            <div style="margin-bottom:12px;font-size:13px;color:#666">
+              版本 ${latestVersion}${totalSizeMb ? ` · ${totalSizeMb} MB` : ''}
+            </div>
+            <div style="margin-bottom:8px">
+              <div style="width:100%;height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden">
+                <div style="width:${percent}%;height:100%;background:${progressColor};border-radius:4px;transition:width 0.3s"></div>
+              </div>
+            </div>
+            <div style="font-size:13px;color:#999">${statusText}</div>
+            <div style="margin-top:12px;padding:8px 10px;background:#FFFBE6;border:1px solid #FFE58F;border-radius:6px;font-size:12px;color:#AD6800">
+              ⚠️ 正在通过 GitHub 下载，可能需要特定网络环境。若长时间无进度请取消后检查网络。
+            </div>
+          `)
+        })
+
+        // 启动下载
+        const dlResult = await window.electronAPI.downloadUpdateInstaller({
+          downloadUrl,
+          downloadName
+        })
+
+        if (progressUnsub) progressUnsub()
+
+        if (downloadCancelled) return
+
+        if (!dlResult?.success) {
+          message.error(`下载失败：${dlResult?.message || '未知错误'}`)
+          modal.destroy()
+          return
+        }
+
+        // 更新弹窗为"即将安装"
+        updateModalContent(`
+          <div style="text-align:center;padding:20px 0">
+            <div style="font-size:32px;margin-bottom:12px">✅</div>
+            <div style="font-size:15px;font-weight:600;color:#333;margin-bottom:8px">下载完成</div>
+            <div style="font-size:13px;color:#666;margin-bottom:16px">即将打开安装程序，请按照安装向导完成更新。</div>
+          </div>
+        `)
+
+        // 短暂延迟后更新按钮文字并打开安装包
+        setTimeout(async () => {
+          modal.update({
+            okText: '好的',
+            cancelText: null,
+            cancelButtonProps: { style: { display: 'none' } },
+            onOk: () => modal.destroy()
+          })
+
+          if (window.electronAPI?.runUpdateInstaller) {
+            await window.electronAPI.runUpdateInstaller({
+              filePath: dlResult.filePath
+            })
+          }
+        }, 800)
+
+      } catch (err) {
+        if (progressUnsub) progressUnsub()
+        if (!downloadCancelled) {
+          message.error(`下载出错：${err?.message || '未知错误'}`)
+          modal.destroy()
+        }
+      }
     } catch {}
   }
 

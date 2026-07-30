@@ -1548,6 +1548,19 @@ ipcMain.handle('check-github-release-update', async () => {
     }
 
     const hasUpdate = compareSemverLike(latestVersionRaw, currentVersion) > 0
+
+    // 找出当前平台对应的安装包下载链接
+    const assetExt = isWin ? '.exe' : '.dmg'
+    const assetNameHint = isWin ? 'exe' : 'dmg'
+    const assets = Array.isArray(payload?.assets) ? payload.assets : []
+    const installerAsset = assets.find(a => {
+      const name = String(a?.name || '').toLowerCase()
+      return name.endsWith(assetExt) || name.includes(assetNameHint)
+    })
+    const downloadUrl = installerAsset?.browser_download_url || ''
+    const downloadSize = Number(installerAsset?.size || 0)
+    const downloadName = String(installerAsset?.name || '')
+
     return {
       success: true,
       hasUpdate,
@@ -1555,7 +1568,10 @@ ipcMain.handle('check-github-release-update', async () => {
       latestVersion: normalizeVersionText(latestVersionRaw),
       latestVersionRaw,
       releaseUrl: String(payload?.html_url || 'https://github.com/ghrkya/TYICC_Midday_Music/releases/latest'),
-      publishedAt: String(payload?.published_at || '')
+      publishedAt: String(payload?.published_at || ''),
+      downloadUrl,
+      downloadSize,
+      downloadName
     }
   } catch (err) {
     const text = String(err?.message || '')
@@ -1566,6 +1582,155 @@ ipcMain.handle('check-github-release-update', async () => {
       currentVersion,
       message: timedOut ? '检查更新请求超时，已跳过' : text || '检查更新失败'
     }
+  }
+})
+
+// 当前活跃的更新下载请求（用于取消）
+let activeUpdateDownload = null
+
+ipcMain.handle('download-update-installer', async (event, { downloadUrl, downloadName }) => {
+  let destPath = ''
+  try {
+    const url = String(downloadUrl || '').trim()
+    if (!url) return { success: false, message: '下载地址为空' }
+
+    ensureDir(DOWNLOAD_DIR)
+    const fileName = sanitizeFilename(downloadName || 'TYICC_Update_Installer') || `TYICC_Update_${Date.now()}`
+    destPath = path.join(DOWNLOAD_DIR, fileName)
+
+    const sendProgress = (payload) => {
+      try { event.sender.send('update-download-progress', payload) } catch {}
+    }
+
+    sendProgress({ phase: 'connecting' })
+
+    // 流式下载，带进度上报
+    const data = await new Promise((resolve, reject) => {
+      const doDownload = (currentUrl, redirectCount) => {
+        if (redirectCount > 5) {
+          reject(new Error('重定向过多'))
+          return
+        }
+
+        const urlObj = new URL(currentUrl)
+        const lib = urlObj.protocol === 'http:' ? http : https
+        const startTime = Date.now()
+        let lastReportTime = startTime
+        let receivedBytes = 0
+        let lastReceivedBytes = 0
+        let totalBytes = 0
+
+        const req = lib.get(urlObj, {
+          headers: { 'User-Agent': 'TYICC-Midday-Music-Updater' }
+        }, (res) => {
+          const status = res.statusCode || 0
+
+          if (status >= 300 && status < 400 && res.headers.location) {
+            res.resume()
+            doDownload(new URL(res.headers.location, urlObj).toString(), redirectCount + 1)
+            return
+          }
+
+          if (status < 200 || status >= 300) {
+            res.resume()
+            reject(new Error(`HTTP ${status}`))
+            return
+          }
+
+          totalBytes = Number(res.headers['content-length'] || 0)
+          const chunks = []
+
+          res.on('data', (chunk) => {
+            chunks.push(chunk)
+            receivedBytes += chunk.length
+            const now = Date.now()
+            if (now - lastReportTime >= 300) {
+              const elapsed = (now - startTime) / 1000
+              const speed = elapsed > 0 ? (receivedBytes - lastReceivedBytes) / (now - lastReportTime) * 1000 : 0
+              lastReceivedBytes = receivedBytes
+              lastReportTime = now
+              sendProgress({
+                phase: 'downloading',
+                receivedBytes,
+                totalBytes,
+                speed,
+                percent: totalBytes > 0 ? Math.round((receivedBytes / totalBytes) * 100) : 0
+              })
+            }
+          })
+
+          res.on('end', () => {
+            sendProgress({
+              phase: 'writing',
+              receivedBytes,
+              totalBytes: totalBytes || receivedBytes,
+              speed: 0,
+              percent: 100
+            })
+            resolve(Buffer.concat(chunks))
+          })
+
+          res.on('error', reject)
+        })
+
+        req.on('error', reject)
+        req.setTimeout(300000, () => {
+          req.destroy(new Error('下载超时'))
+        })
+
+        activeUpdateDownload = req
+      }
+
+      doDownload(url, 0)
+    })
+
+    activeUpdateDownload = null
+
+    if (!data || data.length < 1024) {
+      try { fs.unlinkSync(destPath) } catch {}
+      return { success: false, message: '下载文件异常（文件过小）' }
+    }
+
+    fs.writeFileSync(destPath, data)
+    return { success: true, filePath: destPath, fileName }
+  } catch (err) {
+    activeUpdateDownload = null
+    try { if (destPath) fs.unlinkSync(destPath) } catch {}
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('cancel-update-download', async () => {
+  try {
+    if (activeUpdateDownload) {
+      activeUpdateDownload.destroy(new Error('用户取消下载'))
+      activeUpdateDownload = null
+    }
+    // 清理可能残留的半成品文件
+    try {
+      ensureDir(DOWNLOAD_DIR)
+      const files = fs.readdirSync(DOWNLOAD_DIR)
+      for (const f of files) {
+        if (f.startsWith('TYICC_Update_') || f.includes('Setup') || f.endsWith('.exe.tmp')) {
+          try { fs.unlinkSync(path.join(DOWNLOAD_DIR, f)) } catch {}
+        }
+      }
+    } catch {}
+    return { success: true }
+  } catch (err) {
+    return { success: false, message: err.message }
+  }
+})
+
+ipcMain.handle('run-update-installer', async (event, { filePath }) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return { success: false, message: '安装文件不存在' }
+    }
+    await electron.shell.openPath(filePath)
+    return { success: true }
+  } catch (err) {
+    return { success: false, message: err.message }
   }
 })
 
