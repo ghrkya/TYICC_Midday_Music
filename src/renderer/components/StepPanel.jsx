@@ -275,6 +275,8 @@ export default function StepPanel({
 
   const canUseBgm = step.key === 'greeting' || step.key === 'transition' || step.key === 'ending'
   const isContinueMode = !!continuePlaybackEnabled && !!canInheritPreviousBgm
+  const bgmRepeatCount = Math.max(1, Number(bgm?.repeatCount || 1))
+  const bgmIsRepeating = !!bgm && bgmRepeatCount > 1
   const previousStepLabel = previousBgmStepKey === 'greeting'
     ? '开场语'
     : previousBgmStepKey === 'transition' ? '转场' : '上一步'
@@ -557,8 +559,8 @@ export default function StepPanel({
           )}
 
           {canUseBgm && bgm && (
-            <div className="selected-file" style={{ borderStyle: 'dashed', marginTop: 8 }}>
-              <div className="selected-file-icon" style={{ color: '#FFFFFF' }}>
+            <div className="selected-file" style={{ borderStyle: 'dashed', marginTop: 8, borderColor: '#C7B9FF', background: '#FBF6FF' }}>
+              <div className="selected-file-icon" style={{ color: '#7A42DB', background: '#F1E9FF' }}>
                 <BgColorsOutlined />
               </div>
               <div className="selected-file-info">
@@ -571,12 +573,17 @@ export default function StepPanel({
                   {bgm.size ? ` · ${formatFileSize(bgm.size)}` : ''}
                   {typeof bgm.volumeDb === 'number' ? ` · 音量 ${bgm.volumeDb}dB` : ` · 音量 ${DEFAULT_BGM_VOLUME_DB}dB`}
                   {typeof bgm.startTime === 'number' && typeof bgm.endTime === 'number'
-                    ? ` · 时段 ${bgm.startTime.toFixed(1)}s-${bgm.endTime.toFixed(1)}s`
+                    ? ` · 开始 ${bgm.startTime.toFixed(1)}s`
                     : ''}
                 </div>
+                {bgmIsRepeating && (
+                  <div style={{ marginTop: 4, fontSize: 12, color: '#7A42DB' }}>
+                    由于背景音乐过短，此处重复播放背景音乐*{bgmRepeatCount}次。
+                  </div>
+                )}
               </div>
               <div className="selected-file-actions" style={{ display: 'flex', gap: 6 }}>
-                <Button size="small" onClick={openSegmentModal} disabled={isContinueMode}>选择时段</Button>
+                <Button size="small" onClick={openSegmentModal} disabled={isContinueMode}>选择开始时间</Button>
                 <Button size="small" icon={<DeleteOutlined />} onClick={() => onRemoveBgm(step.key)} danger disabled={isContinueMode} />
               </div>
             </div>
@@ -619,9 +626,9 @@ export default function StepPanel({
         <div style={{
           marginTop: 12,
           padding: '10px 12px',
-          border: '1px dashed #C7B9FF',
+          border: '1px dashed #9D7AE8',
           borderRadius: 10,
-          background: '#FBF9FF'
+          background: '#F6F0FF'
         }}>
           {canInheritPreviousBgm && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -652,8 +659,8 @@ export default function StepPanel({
             </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <BgColorsOutlined style={{ color: '#6C63FF' }} />
-            <span style={{ fontWeight: 600, color: '#4A42DB' }}>背景音乐（口播底垫）</span>
+            <BgColorsOutlined style={{ color: '#7A42DB' }} />
+            <span style={{ fontWeight: 600, color: '#7A42DB' }}>背景音乐（口播底垫）</span>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Button size="small" onClick={() => onSelectBgmLocal(step.key)} disabled={!file}>选择本地背景音乐</Button>
@@ -734,7 +741,7 @@ function BgmFilePreview({ file }) {
         fontSize: 12
       }}>
         <span>仅供预览文件，非最终完整播放长度</span>
-        <Tooltip title="最终背景音乐长度为口播长度，背景音乐播放选段可以在“时段选择”中选择。">
+        <Tooltip title="最终背景音乐长度为口播长度，第一遍背景音乐开始时间可在“开始时间选择”中设置。">
           <InfoCircleOutlined style={{ color: '#8c8c8c', fontSize: 14, cursor: 'help', marginTop: 1 }} />
         </Tooltip>
       </div>
