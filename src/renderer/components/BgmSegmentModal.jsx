@@ -54,7 +54,7 @@ export default function BgmSegmentModal({
   const [dragging, setDragging] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [playheadSec, setPlayheadSec] = useState(0)
-  const dragOffsetPxRef = useRef(0)
+  const previewStartSecRef = useRef(0)
   const decodedBufferRef = useRef(null)
   const audioCtxRef = useRef(null)
   const sourceNodeRef = useRef(null)
@@ -69,24 +69,24 @@ export default function BgmSegmentModal({
 
   const safeVoiceDuration = Math.max(0, Number(voiceDuration) || 0)
   const endSec = startSec + safeVoiceDuration
+  const repeatCount = useMemo(() => {
+    if (!duration || duration <= 0 || safeVoiceDuration <= 0) return 1
+    return Math.max(1, Math.ceil((startSec + safeVoiceDuration) / duration))
+  }, [duration, safeVoiceDuration, startSec])
 
   const contentWidth = useMemo(() => Math.max(800, Math.round(1200 * zoom)), [zoom])
-  const rectWidthPx = useMemo(() => {
-    if (!duration || duration <= 0 || safeVoiceDuration <= 0) return 0
-    return (safeVoiceDuration / duration) * contentWidth
-  }, [duration, safeVoiceDuration, contentWidth])
 
   const leftPx = useMemo(() => {
     if (!duration || duration <= 0) return 0
     return (startSec / duration) * contentWidth
   }, [startSec, duration, contentWidth])
 
-  const canUse = duration > 0 && safeVoiceDuration > 0 && safeVoiceDuration <= duration
+  const canUse = duration > 0 && safeVoiceDuration > 0
   const playheadPx = useMemo(() => {
     if (!duration || duration <= 0) return leftPx
-    const sec = clamp(playheadSec, startSec, endSec)
+    const sec = clamp(playheadSec, 0, duration)
     return (sec / duration) * contentWidth
-  }, [duration, playheadSec, startSec, endSec, contentWidth, leftPx])
+  }, [duration, playheadSec, contentWidth, leftPx])
 
   const setPlayingSafe = (val) => {
     playingRef.current = val
@@ -120,7 +120,7 @@ export default function BgmSegmentModal({
     stopSourceNode()
     setPlayingSafe(false)
     if (resetToStart) {
-      setPlayheadSec(startSec)
+      setPlayheadSec(Number(previewStartSecRef.current || startSec || 0))
     } else if (stickToEnd) {
       setPlayheadSec(endSec)
     } else {
@@ -132,11 +132,11 @@ export default function BgmSegmentModal({
     if (!playingRef.current) return
     const t = getCurrentPlayhead()
     setPlayheadSec(t)
-    if (t < endSec - 0.01) {
+    if (t < duration - 0.01) {
       playRafRef.current = requestAnimationFrame(syncPlayhead)
       return
     }
-    stopPreview(false, true)
+    stopPreview(true, false)
   }
 
   useEffect(() => {
@@ -166,7 +166,7 @@ export default function BgmSegmentModal({
         const p = buildPeaks(src, 1800)
         if (disposed) return
 
-        const initStart = clamp(Number(bgm.startTime || 0), 0, Math.max(0, d - safeVoiceDuration))
+        const initStart = clamp(Number(bgm.startTime || 0), 0, Math.max(0, d))
         setDuration(d)
         setStartSec(initStart)
         setPlayheadSec(initStart)
@@ -196,7 +196,7 @@ export default function BgmSegmentModal({
 
   useEffect(() => {
     if (!open) return
-    // 打开时段选择弹窗时，暂停页面里所有音频预览条，避免与选段试听叠加播放。
+    // 打开开始时间选择弹窗时，暂停页面里所有音频预览条，避免叠加播放。
     const audioEls = document.querySelectorAll('audio')
     audioEls.forEach((el) => {
       try { el.pause() } catch {}
@@ -231,7 +231,7 @@ export default function BgmSegmentModal({
     const mid = h / 2
     const barW = Math.max(1, contentWidth / peaks.length)
 
-    // 全部灰色波形
+    // 全灰色波形
     ctx.strokeStyle = '#7f7f88'
     for (let i = 0; i < peaks.length; i++) {
       const x = i * barW
@@ -241,32 +241,13 @@ export default function BgmSegmentModal({
       ctx.lineTo(x, mid + amp)
       ctx.stroke()
     }
-
-    // 选中区内白色波形
-    const selX = leftPx
-    const selW = Math.max(1, rectWidthPx)
-    ctx.save()
-    ctx.beginPath()
-    ctx.rect(selX, 0, selW, h)
-    ctx.clip()
-    ctx.strokeStyle = '#FFFFFF'
-    for (let i = 0; i < peaks.length; i++) {
-      const x = i * barW
-      const amp = Math.max(1, peaks[i] * (h * 0.42))
-      ctx.beginPath()
-      ctx.moveTo(x, mid - amp)
-      ctx.lineTo(x, mid + amp)
-      ctx.stroke()
-    }
-    ctx.restore()
-  }, [peaks, contentWidth, leftPx, rectWidthPx])
+  }, [peaks, contentWidth])
 
   const updateStartByPx = (newLeftPx) => {
     if (!duration || duration <= 0) return
-    const maxLeft = Math.max(0, contentWidth - rectWidthPx)
-    const clamped = clamp(newLeftPx, 0, maxLeft)
+    const clamped = clamp(newLeftPx, 0, contentWidth)
     const sec = (clamped / contentWidth) * duration
-    const nextStart = clamp(sec, 0, Math.max(0, duration - safeVoiceDuration))
+    const nextStart = clamp(sec, 0, Math.max(0, duration))
     setStartSec(nextStart)
     if (!playing) setPlayheadSec(nextStart)
   }
@@ -274,8 +255,15 @@ export default function BgmSegmentModal({
   const onSelectionMouseDown = (e) => {
     if (!canUse) return
     setDragging(true)
-    dragOffsetPxRef.current = e.clientX - e.currentTarget.getBoundingClientRect().left
     e.preventDefault()
+  }
+
+  const onInnerMouseDown = (e) => {
+    if (!canUse) return
+    const innerRect = innerRef.current.getBoundingClientRect()
+    const scrollLeft = scrollRef.current ? scrollRef.current.scrollLeft : 0
+    const x = e.clientX - innerRect.left + scrollLeft
+    updateStartByPx(x)
   }
 
   const onInnerMouseMove = (e) => {
@@ -283,7 +271,7 @@ export default function BgmSegmentModal({
     const innerRect = innerRef.current.getBoundingClientRect()
     const scrollLeft = scrollRef.current ? scrollRef.current.scrollLeft : 0
     const x = e.clientX - innerRect.left + scrollLeft
-    updateStartByPx(x - dragOffsetPxRef.current)
+    updateStartByPx(x)
   }
 
   const onChangeStart = (val) => {
@@ -295,18 +283,6 @@ export default function BgmSegmentModal({
     }
     setStartSec(v)
     if (!playing) setPlayheadSec(v)
-  }
-
-  const onChangeEnd = (val) => {
-    const v = Number(val)
-    if (Number.isNaN(v)) return
-    const nextStart = v - safeVoiceDuration
-    if (nextStart < 0 || v > duration) {
-      Modal.warning({ title: '选段超出范围', content: '结束时间超出音频范围，请重新输入。' })
-      return
-    }
-    setStartSec(nextStart)
-    if (!playing) setPlayheadSec(nextStart)
   }
 
   const onTogglePlay = async () => {
@@ -327,22 +303,17 @@ export default function BgmSegmentModal({
       source.buffer = decodedBufferRef.current
       source.connect(audioCtxRef.current.destination)
 
-      const t = Number(playheadSec || startSec)
-      const resumeAt = (t >= startSec && t < endSec - 0.01) ? t : startSec
-      const playDur = Math.max(0.01, endSec - resumeAt)
+      const resumeAt = Number(startSec || 0)
+      const playDur = Math.max(0.01, duration - resumeAt)
 
       playStartCtxTimeRef.current = audioCtxRef.current.currentTime
       playStartOffsetRef.current = resumeAt
+      previewStartSecRef.current = resumeAt
       sourceNodeRef.current = source
 
       source.onended = () => {
         if (!playingRef.current) return
-        const nowAt = getCurrentPlayhead()
-        if (nowAt >= endSec - 0.01) {
-          stopPreview(false, true)
-        } else {
-          stopPreview(false)
-        }
+        stopPreview(true, false)
       }
 
       setPlayheadSec(resumeAt)
@@ -364,10 +335,10 @@ export default function BgmSegmentModal({
       width={980}
       open={open}
       onCancel={onCancel}
-      title="选择背景音乐时段"
+      title="选择背景音乐开始时间"
       onOk={() => onConfirm({ startTime: startSec, endTime: endSec, duration })}
       okButtonProps={{ disabled: !canUse || !!error || loading }}
-      okText="确认时段"
+      okText="确认开始时间"
       cancelText="取消"
       destroyOnHidden
     >
@@ -377,17 +348,15 @@ export default function BgmSegmentModal({
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 10 }}>
             <div>开始时间</div>
             <InputNumber min={0} step={0.1} value={Number(startSec.toFixed(2))} onChange={onChangeStart} />
-            <div>结束时间</div>
-            <InputNumber min={0} step={0.1} value={Number(endSec.toFixed(2))} onChange={onChangeEnd} />
             <div style={{ marginLeft: 'auto', color: '#888' }}>
               口播时长: {safeVoiceDuration.toFixed(2)}s / 背景音乐: {duration.toFixed(2)}s
             </div>
           </div>
 
-          {!canUse && duration > 0 && (
+          {repeatCount > 1 && (
             <Alert
-              type="warning"
-              message="背景音乐总时长短于口播，无法设置时段，请更换更长的背景音乐。"
+              type="info"
+              message={`背景音乐较短，将自动重复播放 ${repeatCount} 次以补足口播时长。`}
               style={{ marginBottom: 10 }}
             />
           )}
@@ -399,6 +368,7 @@ export default function BgmSegmentModal({
             <div
               ref={innerRef}
               style={{ width: contentWidth, height: 180, position: 'relative', cursor: dragging ? 'grabbing' : 'default' }}
+              onMouseDown={onInnerMouseDown}
               onMouseMove={onInnerMouseMove}
             >
               <canvas ref={canvasRef} style={{ width: contentWidth, height: 160, display: 'block' }} />
@@ -409,15 +379,16 @@ export default function BgmSegmentModal({
                     position: 'absolute',
                     left: leftPx,
                     top: 0,
-                    width: rectWidthPx,
+                    width: 2,
                     height: 160,
-                    border: '2px solid #ffffff',
+                    background: 'rgba(255, 102, 102, 0.45)',
                     boxSizing: 'border-box',
-                    cursor: 'grab'
+                    cursor: 'grab',
+                    zIndex: 3
                   }}
                 />
               )}
-              {canUse && (
+              {canUse && playing && (
                 <div
                   style={{
                     position: 'absolute',
@@ -427,7 +398,8 @@ export default function BgmSegmentModal({
                     height: 160,
                     background: '#FF4D4F',
                     pointerEvents: 'none',
-                    boxShadow: '0 0 6px rgba(255, 77, 79, 0.55)'
+                    boxShadow: '0 0 6px rgba(255, 77, 79, 0.55)',
+                    zIndex: 4
                   }}
                 />
               )}
@@ -449,7 +421,7 @@ export default function BgmSegmentModal({
             <span>x{zoom.toFixed(1)}</span>
             <Button size="small" onClick={() => setZoom(z => Math.min(8, Number((z + 0.5).toFixed(2))))}>+</Button>
             <span style={{ marginLeft: 'auto', color: '#999' }}>
-              当前区间: {formatSec(startSec)} - {formatSec(endSec)}
+              当前开始时间: {formatSec(startSec)}（第一遍从此处开始，后续循环从头开始）
             </span>
           </div>
         </>

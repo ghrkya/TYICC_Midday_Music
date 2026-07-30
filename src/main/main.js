@@ -1196,11 +1196,7 @@ ipcMain.handle('mix-voice-with-bgm', async (event, {
     }
 
     const voiceDuration = Number(durationSec) > 0 ? Number(durationSec) : await getAudioDurationSeconds(voicePath)
-    const bgmDuration = await getAudioDurationSeconds(bgmPath)
     const start = Math.max(0, Number(startSec) || 0)
-    if (start + voiceDuration > bgmDuration + 0.01) {
-      return { success: false, message: '背景音乐可用时长不足，请重新选择时段' }
-    }
 
     ensureDir(path.dirname(outputPath))
     const safeVol = Math.max(0, Math.min(1, Number(bgmVolume) || 0.501187))
@@ -1209,6 +1205,7 @@ ipcMain.handle('mix-voice-with-bgm', async (event, {
     return await new Promise((resolve) => {
       const proc = spawn(ffPath, [
         '-i', voicePath,
+        '-stream_loop', '-1',
         '-i', bgmPath,
         '-filter_complex', filter,
         '-map', '[mix]',
@@ -1291,6 +1288,8 @@ async function buildExportTags(metadata) {
 
   const tsse = `${osLabel} ${osVersion}; app ${appVersion}; ffmpeg ${ffVersion}; yt-dlp ${ytVersion}`
 
+  const currentYear = new Date().getFullYear()
+
   return {
     TIT2: title,
     TPE1: studentName,
@@ -1299,13 +1298,19 @@ async function buildExportTags(metadata) {
     TENC: 'TYICC午间悦听制作器',
     TSSE: tsse,
     TCON: '广播',
+    TDRC: programDate,
+    COMM: `TYICC午间悦听每日广播节目，由${studentName}主持`,
+    TCOP: `非歌曲及TED演讲部分 : TYICC校园广播站 © ${currentYear}`,
     title,
     artist: studentName,
     album: 'TYICC午间悦听',
     publisher: 'TYICC广播站',
     encoded_by: 'TYICC午间悦听制作器',
     encoder_settings: tsse,
-    genre: '广播'
+    genre: '广播',
+    date: programDate,
+    comment: `TYICC午间悦听每日广播节目，由${studentName}主持`,
+    copyright: `非歌曲及TED演讲部分 : TYICC校园广播站 © ${currentYear}`
   }
 }
 

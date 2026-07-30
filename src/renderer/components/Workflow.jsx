@@ -87,11 +87,12 @@ const PREV_BGM_STEP_MAP = {
   transition: 'greeting',
   ending: 'transition'
 }
-const CONTINUE_PLAYBACK_OVERFLOW_ERROR = '__CONTINUE_PLAYBACK_OVERFLOW__'
-const STEP_LABEL_MAP = {
-  greeting: '开场语（第2步）',
-  transition: '转场（第4步）',
-  ending: '结语（第6步）'
+function getBgmRepeatCount(voiceDuration, bgmDuration, startTime = 0) {
+  const voice = Math.max(0, Number(voiceDuration) || 0)
+  const bgm = Math.max(0, Number(bgmDuration) || 0)
+  const start = Math.max(0, Number(startTime) || 0)
+  if (voice <= 0 || bgm <= 0) return 1
+  return Math.max(1, Math.ceil((voice + start) / bgm))
 }
 
 function isSameBgmTrack(a, b) {
@@ -191,23 +192,16 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     }))
   }, [])
 
-  const notifyBgmRemovedForStep = useCallback((stepKey) => {
-    const stepLabel = STEP_LABEL_MAP[stepKey] || stepKey
-    Modal.warning({
-      title: '背景音乐添加失败',
-      content: `${stepLabel} 的背景音乐时长不足，已自动删除该步骤背景音乐，请重新添加。`
-    })
-  }, [])
-
-  const notifyBgmRemovedForSteps = useCallback((stepKeys) => {
-    const uniqueKeys = Array.from(new Set((stepKeys || []).filter(Boolean)))
-    if (uniqueKeys.length === 0) return
-    const labels = uniqueKeys.map((key) => STEP_LABEL_MAP[key] || key)
-    const multiLine = labels.map((label) => `- ${label}`).join('\n')
-    Modal.warning({
-      title: '背景音乐添加失败',
-      content: `以下步骤背景音乐时长不足，已自动删除，请重新添加：\n${multiLine}`
-    })
+  const buildBgmTrackMeta = useCallback((bgmTrack, voiceDuration, bgmDuration, startTime = 0) => {
+    const repeatCount = getBgmRepeatCount(voiceDuration, bgmDuration, startTime)
+    return {
+      ...bgmTrack,
+      duration: Number(bgmDuration || 0),
+      voiceDuration: Number(voiceDuration || 0),
+      startTime: Math.max(0, Number(startTime) || 0),
+      endTime: Math.max(0, Number(startTime) || 0) + Math.max(0, Number(voiceDuration) || 0),
+      repeatCount
+    }
   }, [])
 
   const getDurationByPath = useCallback(async (filePath) => {
@@ -239,32 +233,17 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       bgmDuration = await getDurationByPath(currentBgm.path)
     }
 
-    if (voiceDuration > 0 && bgmDuration > 0 && bgmDuration + 0.01 < voiceDuration) {
-      setStepFiles(prev => ({ ...prev, [stepKey]: { ...fileInfo, duration: voiceDuration || fileInfo?.duration } }))
-      setBgmTracks(prev => ({ ...prev, [stepKey]: null }))
-      notifyBgmRemovedForStep(stepKey)
-      return true
-    }
-
     let nextBgm = currentBgm
     if (voiceDuration > 0 && bgmDuration > 0) {
-      const maxStart = Math.max(0, bgmDuration - voiceDuration)
       const rawStart = Number(currentBgm.startTime || 0)
-      const nextStart = (rawStart <= maxStart + 0.01) ? rawStart : 0
-      const nextEnd = Math.min(bgmDuration, nextStart + voiceDuration)
-      nextBgm = {
-        ...currentBgm,
-        duration: bgmDuration,
-        voiceDuration,
-        startTime: nextStart,
-        endTime: nextEnd
-      }
+      const nextStart = bgmDuration > 0 ? ((rawStart % bgmDuration) + bgmDuration) % bgmDuration : 0
+      nextBgm = buildBgmTrackMeta(currentBgm, voiceDuration, bgmDuration, nextStart)
     }
 
     setStepFiles(prev => ({ ...prev, [stepKey]: { ...fileInfo, duration: voiceDuration || fileInfo?.duration } }))
     setBgmTracks(prev => ({ ...prev, [stepKey]: nextBgm }))
     return true
-  }, [bgmTracks, getDurationByPath, notifyBgmRemovedForStep, setStepFile])
+  }, [bgmTracks, buildBgmTrackMeta, getDurationByPath, setStepFile])
 
   const ensureBgmDuration = useCallback(async (stepKey, bgmPath) => {
     const voiceFile = stepFiles[stepKey]
@@ -281,9 +260,6 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     }
     const voiceDuration = Number(voiceDurRes.duration || 0)
     const bgmDuration = Number(bgmDurRes.duration || 0)
-    if (bgmDuration + 0.01 < voiceDuration) {
-      throw new Error(`背景音乐时长不足：背景 ${bgmDuration.toFixed(1)}s，口播 ${voiceDuration.toFixed(1)}s`)
-    }
     return { voiceDuration, bgmDuration }
   }, [stepFiles])
 
@@ -297,7 +273,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       const { voiceDuration, bgmDuration } = await ensureBgmDuration(stepKey, filePath)
       setBgmTracks(prev => ({
         ...prev,
-        [stepKey]: {
+        [stepKey]: buildBgmTrackMeta({
           name: filePath.split(/[\\/]/).pop(),
           path: filePath,
           source: 'local',
@@ -307,7 +283,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
           duration: bgmDuration,
           voiceDuration,
           volumeDb: DEFAULT_BGM_VOLUME_DB
-        }
+        }, voiceDuration, bgmDuration, 0)
       }))
       message.success('背景音乐已添加')
     } catch (err) {
@@ -335,7 +311,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       const { voiceDuration, bgmDuration } = await ensureBgmDuration(stepKey, result.filePath)
       setBgmTracks(prev => ({
         ...prev,
-        [stepKey]: {
+        [stepKey]: buildBgmTrackMeta({
           name: result.fileName,
           path: result.filePath,
           source: 'bilibili',
@@ -346,7 +322,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
           duration: bgmDuration,
           voiceDuration,
           volumeDb: DEFAULT_BGM_VOLUME_DB
-        }
+        }, voiceDuration, bgmDuration, 0)
       }))
       message.success('背景音乐下载并添加成功')
     } catch (err) {
@@ -360,7 +336,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       const { voiceDuration, bgmDuration } = await ensureBgmDuration(stepKey, track.path)
       setBgmTracks(prev => ({
         ...prev,
-        [stepKey]: {
+        [stepKey]: buildBgmTrackMeta({
           name: track.title || track.name || track.filename || String(track.path).split(/[\\/]/).pop(),
           path: track.path,
           source: 'library',
@@ -373,7 +349,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
           duration: bgmDuration,
           voiceDuration,
           volumeDb: DEFAULT_BGM_VOLUME_DB
-        }
+        }, voiceDuration, bgmDuration, 0)
       }))
       message.success(`已从音乐库导入：${track.title || track.name || '未命名音乐'}`)
       return true
@@ -391,13 +367,18 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     setBgmTracks(prev => {
       const old = prev[stepKey]
       if (!old) return prev
+      const nextStart = Number(segment.startTime || 0)
+      const nextDuration = Number(segment.duration || old.duration || 0)
+      const nextVoiceDuration = Number(old.voiceDuration || 0)
+      const nextRepeatCount = getBgmRepeatCount(nextVoiceDuration, nextDuration, nextStart)
       return {
         ...prev,
         [stepKey]: {
           ...old,
-          startTime: Number(segment.startTime || 0),
+          startTime: nextStart,
           endTime: Number(segment.endTime || 0),
-          duration: Number(segment.duration || old.duration || 0)
+          duration: nextDuration,
+          repeatCount: nextRepeatCount
         }
       }
     })
@@ -417,30 +398,16 @@ export default function Workflow({ networkOk, ffmpegOk }) {
     })
   }, [])
 
-  const buildContinuedBgmTrack = useCallback(async ({ stepKey, prevStepKey, prevBgm, prevVoiceDuration, rejectOnOverflow = false }) => {
+  const buildContinuedBgmTrack = useCallback(async ({ stepKey, prevStepKey, prevBgm, prevVoiceDuration }) => {
     if (!prevBgm?.path) return null
     const { voiceDuration, bgmDuration } = await ensureBgmDuration(stepKey, prevBgm.path)
     const rawStart = Number(prevBgm.startTime || 0) + Math.max(0, Number(prevVoiceDuration || 0))
-    const wrappedStart = bgmDuration > 0 ? (rawStart % bgmDuration) : 0
-    const maxStart = Math.max(0, bgmDuration - voiceDuration)
-    if (rejectOnOverflow && wrappedStart > maxStart + 0.01) {
-      const err = new Error(CONTINUE_PLAYBACK_OVERFLOW_ERROR)
-      err.code = CONTINUE_PLAYBACK_OVERFLOW_ERROR
-      throw err
-    }
-    if (!rejectOnOverflow && wrappedStart > maxStart + 0.01) {
-      return {
-        overflow: true,
-        stepKey,
-        prevStepKey
-      }
-    }
-    const safeStart = wrappedStart <= maxStart + 0.01 ? wrappedStart : 0
+    const wrappedStart = bgmDuration > 0 ? ((rawStart % bgmDuration) + bgmDuration) % bgmDuration : 0
     const greetingVolumeDb = (typeof bgmTracks.greeting?.volumeDb === 'number')
       ? Number(bgmTracks.greeting.volumeDb)
       : DEFAULT_BGM_VOLUME_DB
 
-    return {
+    return buildBgmTrackMeta({
       name: prevBgm.name,
       path: prevBgm.path,
       source: 'previous',
@@ -450,33 +417,23 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       artist: prevBgm.artist || '',
       tags: Array.isArray(prevBgm.tags) ? prevBgm.tags : [],
       size: Number(prevBgm.size || 0),
-      startTime: safeStart,
-      endTime: Math.min(bgmDuration, safeStart + voiceDuration),
-      duration: bgmDuration,
-      voiceDuration,
       volumeDb: greetingVolumeDb
-    }
-  }, [ensureBgmDuration, bgmTracks.greeting])
+    }, voiceDuration, bgmDuration, wrappedStart)
+  }, [buildBgmTrackMeta, ensureBgmDuration, bgmTracks.greeting])
 
-  const syncContinuePlaybackChain = useCallback(async ({ rejectOnOverflow = false } = {}) => {
+  const syncContinuePlaybackChain = useCallback(async () => {
     const greetingBgm = bgmTracks.greeting
     if (!greetingBgm?.path) return
 
     let nextTransition = null
-    const invalidSteps = []
     if (stepFiles.transition?.path) {
       const greetingVoiceDuration = Number(greetingBgm.voiceDuration || stepFiles.greeting?.duration || 0)
       nextTransition = await buildContinuedBgmTrack({
         stepKey: 'transition',
         prevStepKey: 'greeting',
         prevBgm: greetingBgm,
-        prevVoiceDuration: greetingVoiceDuration,
-        rejectOnOverflow
+        prevVoiceDuration: greetingVoiceDuration
       })
-      if (nextTransition?.overflow) {
-        invalidSteps.push('transition')
-        nextTransition = null
-      }
     }
 
     const transitionForEnding = nextTransition || bgmTracks.transition
@@ -487,28 +444,13 @@ export default function Workflow({ networkOk, ffmpegOk }) {
         stepKey: 'ending',
         prevStepKey: 'transition',
         prevBgm: transitionForEnding,
-        prevVoiceDuration: transitionVoiceDuration,
-        rejectOnOverflow
+        prevVoiceDuration: transitionVoiceDuration
       })
-      if (nextEnding?.overflow) {
-        invalidSteps.push('ending')
-        nextEnding = null
-      }
-    } else if (!rejectOnOverflow && stepFiles.ending?.path) {
-      if (bgmTracks.ending?.linkMode === 'continueFromPrevious') {
-        invalidSteps.push('ending')
-      }
     }
 
     setBgmTracks((prev) => {
       let changed = false
       const next = { ...prev }
-      for (const stepKey of invalidSteps) {
-        if (next[stepKey]) {
-          next[stepKey] = null
-          changed = true
-        }
-      }
       if (nextTransition && !isSameBgmTrack(prev.transition, nextTransition)) {
         next.transition = nextTransition
         changed = true
@@ -519,10 +461,7 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       }
       return changed ? next : prev
     })
-    if (!rejectOnOverflow && invalidSteps.length > 0) {
-      notifyBgmRemovedForSteps(invalidSteps)
-    }
-  }, [bgmTracks.greeting, bgmTracks.transition, bgmTracks.ending, stepFiles.transition, stepFiles.ending, stepFiles.greeting, buildContinuedBgmTrack, notifyBgmRemovedForSteps])
+  }, [bgmTracks.greeting, bgmTracks.transition, bgmTracks.ending, stepFiles.transition, stepFiles.ending, stepFiles.greeting, buildContinuedBgmTrack])
 
   const onUsePreviousBgmSameAudio = useCallback(async (stepKey) => {
     try {
@@ -540,15 +479,14 @@ export default function Workflow({ networkOk, ffmpegOk }) {
       setBgmTracks(prev => {
         const current = prev[stepKey] || null
         const currentStart = Number(current?.startTime || 0)
-        const maxStart = Math.max(0, bgmDuration - voiceDuration)
-        const safeStart = currentStart <= maxStart + 0.01 ? currentStart : 0
+        const safeStart = bgmDuration > 0 ? ((currentStart % bgmDuration) + bgmDuration) % bgmDuration : 0
         const safeVolume = (typeof current?.volumeDb === 'number')
           ? Number(current.volumeDb)
           : (typeof prevBgm.volumeDb === 'number' ? Number(prevBgm.volumeDb) : DEFAULT_BGM_VOLUME_DB)
 
         return {
           ...prev,
-          [stepKey]: {
+          [stepKey]: buildBgmTrackMeta({
             name: prevBgm.name,
             path: prevBgm.path,
             source: 'previous',
@@ -557,12 +495,8 @@ export default function Workflow({ networkOk, ffmpegOk }) {
             artist: prevBgm.artist || '',
             tags: Array.isArray(prevBgm.tags) ? prevBgm.tags : [],
             size: Number(prevBgm.size || 0),
-            startTime: safeStart,
-            endTime: Math.min(bgmDuration, safeStart + voiceDuration),
-            duration: bgmDuration,
-            voiceDuration,
             volumeDb: safeVolume
-          }
+          }, voiceDuration, bgmDuration, safeStart)
         }
       })
       message.success('已使用与上一步相同的背景音乐')
@@ -582,17 +516,10 @@ export default function Workflow({ networkOk, ffmpegOk }) {
         throw new Error('请先在第2步设置背景音乐')
       }
 
-      await syncContinuePlaybackChain({ rejectOnOverflow: true })
+      await syncContinuePlaybackChain()
       setContinuePlaybackEnabled(true)
       message.success('已启用延续上步播放（转场与结语已联动）')
     } catch (err) {
-      if (err?.code === CONTINUE_PLAYBACK_OVERFLOW_ERROR || err?.message === CONTINUE_PLAYBACK_OVERFLOW_ERROR) {
-        Modal.warning({
-          title: '无法启用延续上步播放',
-          content: '上步音频剩余时间不足，如要使用相同音乐，请选择“使用上步音乐背景音乐文件”'
-        })
-        return
-      }
       message.warning(err.message)
     }
   }, [bgmTracks.greeting, syncContinuePlaybackChain])
@@ -611,7 +538,8 @@ export default function Workflow({ networkOk, ffmpegOk }) {
         if (!current || current.linkMode !== 'continueFromPrevious') continue
         next[key] = {
           ...current,
-          linkMode: 'sameAudio'
+          linkMode: 'sameAudio',
+          repeatCount: current.repeatCount || 1
         }
       }
       return next
