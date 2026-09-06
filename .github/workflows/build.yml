@@ -46,8 +46,13 @@ jobs:
 
       - run: npm ci
 
-      - name: Ensure mac yt-dlp executable bit
-        run: chmod +x bin/mac/yt-dlp_macos
+      - name: Bundle standalone macOS yt-dlp
+        run: |
+          curl --fail --location --retry 3 --retry-delay 2 \
+            --output bin/mac/yt-dlp_macos \
+            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
+          chmod +x bin/mac/yt-dlp_macos
+          file bin/mac/yt-dlp_macos
 
       - name: Build frontend + Electron
         run: npm run build

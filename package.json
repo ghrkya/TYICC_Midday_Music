@@ -22,7 +22,7 @@
   "type": "commonjs",
   "build": {
     "appId": "com.tyicc.midday-music",
-    "productName": "TYICC午间悦听",
+    "productName": "TYICC午间悦听制作器",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -63,7 +63,8 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
     }
   },
   "devDependencies": {

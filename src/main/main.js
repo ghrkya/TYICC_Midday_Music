@@ -81,10 +81,10 @@ const isDev = !app.isPackaged
 const isWin = process.platform === 'win32'
 const isMac = process.platform === 'darwin'
 
-// 所有本地数据全部存放在安装路径内，不污染系统用户文件夹
-// dev 模式用项目根目录，prod 模式用 exe 所在目录（asar 只读不可写入）
+// 所有数据存放在安装目录内，删除安装目录即清空全部数据，不碰C盘
+// dev 模式用项目根目录，prod 模式用 exe 所在目录
 const APP_DIR = isDev ? app.getAppPath() : path.dirname(app.getPath('exe'))
-const DATA_DIR = path.join(APP_DIR, 'usrdata')                   // 应用本地数据根目录
+const DATA_DIR = path.join(APP_DIR, 'usrdata')                   // 应用数据根目录（音乐库等）
 const BIN_DIR = path.join(DATA_DIR, 'bin')                       // 存放yt-dlp
 const TEMP_DIR = path.join(DATA_DIR, 'temp')                     // 临时处理文件
 const DOWNLOAD_DIR = path.join(APP_DIR, 'ttmpdownload')          // 下载输出目录
@@ -110,6 +110,15 @@ let mainWindow = null
 
 function ensureExecutableBinary(filePath, fallbackName) {
   if (!filePath || !fs.existsSync(filePath)) return null
+  if (isMac) {
+    try {
+      const header = fs.readFileSync(filePath, { encoding: 'utf8', flag: 'r' }).slice(0, 64)
+      if (header.startsWith('#!')) {
+        console.warn('[yt-dlp] 已忽略需要 Python 的脚本版本，改用 macOS 独立版')
+        return null
+      }
+    } catch {}
+  }
   if (isWin) return filePath
 
   try {
@@ -136,36 +145,47 @@ function ensureExecutableBinary(filePath, fallbackName) {
   return null
 }
 
+function getYtDlpFileName() {
+  return isWin ? 'yt-dlp.exe' : (isMac ? 'yt-dlp_macos' : 'yt-dlp')
+}
+
 /**
  * 获取yt-dlp路径
- * 优先使用项目内打包的版本 (bin/)，回退到用户数据目录
+ * 优先使用 usrdata/bin 中已更新的版本；首次启动才回退到随包版本。
  */
 function getYtDlpPath() {
+  const fileName = getYtDlpFileName()
+  const fallbackPath = path.join(BIN_DIR, fileName)
+  try {
+    if (fs.existsSync(fallbackPath) && fs.statSync(fallbackPath).size > 1000) {
+      const usable = ensureExecutableBinary(fallbackPath, fileName)
+      if (usable) return usable
+    }
+  } catch {}
+
   // dev 模式：项目根目录 bin/
-  const bundledPath = path.join(app.getAppPath(), 'bin', isWin ? 'win' : 'mac', isWin ? 'yt-dlp.exe' : 'yt-dlp_macos')
+  const bundledPath = path.join(app.getAppPath(), 'bin', isWin ? 'win' : 'mac', fileName)
   try {
     if (fs.existsSync(bundledPath)) {
       const stat = fs.statSync(bundledPath)
       if (stat.size > 1000) {
-        const usable = ensureExecutableBinary(bundledPath, isWin ? 'yt-dlp.exe' : 'yt-dlp')
+        const usable = ensureExecutableBinary(bundledPath, fileName)
         if (usable) return usable
       }
     }
   } catch {}
   // 打包后：resources/bin/ 中（extraResources 复制过去的）
   try {
-    const resPath = path.join(process.resourcesPath, 'bin', isWin ? 'win' : 'mac', isWin ? 'yt-dlp.exe' : 'yt-dlp_macos')
+    const resPath = path.join(process.resourcesPath, 'bin', isWin ? 'win' : 'mac', fileName)
     if (fs.existsSync(resPath)) {
       const stat = fs.statSync(resPath)
       if (stat.size > 1000) {
-        const usable = ensureExecutableBinary(resPath, isWin ? 'yt-dlp.exe' : 'yt-dlp')
+        const usable = ensureExecutableBinary(resPath, fileName)
         if (usable) return usable
       }
     }
   } catch {}
-  // 回退到用户数据目录
-  const fallback = path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp')
-  return ensureExecutableBinary(fallback, isWin ? 'yt-dlp.exe' : 'yt-dlp') || fallback
+  return fallbackPath
 }
 
 /**
@@ -292,8 +312,64 @@ ipcMain.handle('check-network', async () => {
  * 自动下载yt-dlp到用户数据目录，并检查更新
  */
 ipcMain.handle('download-yt-dlp', async () => {
-  const ytDlpPath = getYtDlpPath()
   ensureDir(BIN_DIR)
+  const managedYtDlpPath = path.join(BIN_DIR, getYtDlpFileName())
+  const updateTempPath = `${managedYtDlpPath}.new`
+
+  try {
+    const releaseBody = await httpGetBuffer('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest', {
+      'User-Agent': 'TYICC-Midday-Music-Updater',
+      'Accept': 'application/vnd.github+json'
+    }, 12000)
+    const release = JSON.parse(releaseBody.toString('utf8'))
+    const latestVersion = String(release.tag_name || '').replace(/^v/i, '')
+    const assetName = getYtDlpFileName()
+    const asset = (release.assets || []).find((item) => item && item.name === assetName)
+    const localVersion = fs.existsSync(managedYtDlpPath)
+      ? await readToolVersion(managedYtDlpPath, ['--version'], '')
+      : ''
+
+    if (asset?.browser_download_url && latestVersion && (!localVersion || latestVersion > String(localVersion).trim())) {
+      const binary = await httpGetBuffer(asset.browser_download_url, {
+        'User-Agent': 'TYICC-Midday-Music-Updater'
+      }, 120000)
+      if (binary.length < 1024) throw new Error('下载的 yt-dlp 文件异常')
+      fs.writeFileSync(updateTempPath, binary)
+      try { fs.rmSync(managedYtDlpPath, { force: true }) } catch {}
+      fs.renameSync(updateTempPath, managedYtDlpPath)
+      if (!isWin) {
+        try { fs.chmodSync(managedYtDlpPath, '755') } catch {}
+      }
+      return { success: true, updated: true, version: latestVersion, message: `yt-dlp 已更新至 ${latestVersion}` }
+    }
+
+    if (localVersion) {
+      return { success: true, updated: false, version: String(localVersion).trim(), message: `yt-dlp 已是最新版本（${String(localVersion).trim()}）` }
+    }
+  } catch (err) {
+    try { fs.rmSync(updateTempPath, { force: true }) } catch {}
+    const errorText = String(err?.message || '')
+    if (/请求超时|timeout|timed out/i.test(errorText)) {
+      console.warn('[yt-dlp] 二进制下载超时，已中止更新:', errorText)
+      return {
+        success: false,
+        timedOut: true,
+        message: 'yt-dlp 下载超时（超过 2 分钟），已中止更新并保留当前版本'
+      }
+    }
+    console.warn('[yt-dlp] 官方版本检查失败，尝试原有更新方式:', errorText)
+  }
+
+  if (!fs.existsSync(managedYtDlpPath)) {
+    const bundledYtDlpPath = getYtDlpPath()
+    if (bundledYtDlpPath && fs.existsSync(bundledYtDlpPath)) {
+      try {
+        fs.copyFileSync(bundledYtDlpPath, managedYtDlpPath)
+        if (!isWin) fs.chmodSync(managedYtDlpPath, '755')
+      } catch {}
+    }
+  }
+  const ytDlpPath = managedYtDlpPath
 
   // 如果已存在且文件大小>0，直接跳转到更新检查
   if (fs.existsSync(ytDlpPath)) {
@@ -948,7 +1024,7 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
     ]
-    const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)]
+      const defaultUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
 
     const ffPath = getFfmpegPath()
 
@@ -958,13 +1034,9 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
       '--audio-format', 'mp3',
       '--audio-quality', quality === 'best' ? '0' : quality,
       '--no-playlist',
-      '--geo-bypass',
       '--no-check-certificates',
       '--extractor-retries', '5',
       ...(ffPath ? ['--ffmpeg-location', ffPath] : []),
-      '--add-header', `User-Agent:${randomUA}`,
-      '--add-header', 'Referer:https://www.bilibili.com',
-      '--add-header', 'Origin:https://www.bilibili.com',
       '-o', outputTemplate,
       videoUrl
     ]
@@ -987,7 +1059,7 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
         })
 
         proc.on('close', (code) => {
-          if (errorMsg) {
+          if (code !== 0 && errorMsg) {
             console.error(`[yt-dlp stderr][${attemptName}]`, errorMsg.slice(0, 2000))
           }
           resolve({ code, errorMsg })
@@ -1022,7 +1094,7 @@ ipcMain.handle('download-bilibili', async (event, { url, outputDir, quality = 'b
                 const fallbackResult = await fallbackDownloadByApi({
                   input: fallbackBvId || url,
                   outputDir,
-                  randomUA
+                  randomUA: defaultUserAgent
                 })
                 resolve(fallbackResult)
                 return
@@ -1882,6 +1954,34 @@ app.whenReady().then(async () => {
   ensureDir(DOWNLOAD_DIR)
   ensureDir(CACHE_DIR)
 
+  // 检查安装包内 yt-dlp 版本是否比当前已安装的更新，若是则自动替换
+  try {
+    const ytExeName = getYtDlpFileName()
+    const bundledYtPath = isDev
+      ? path.join(app.getAppPath(), 'bin', isWin ? 'win' : 'mac', ytExeName)
+      : path.join(process.resourcesPath, 'bin', isWin ? 'win' : 'mac', ytExeName)
+    const installedYtPath = path.join(BIN_DIR, ytExeName)
+
+    if (fs.existsSync(bundledYtPath) && fs.statSync(bundledYtPath).size > 1000) {
+      const bundledVer = (await readToolVersion(bundledYtPath, ['--version'])).trim()
+      let installedVer = ''
+      if (fs.existsSync(installedYtPath)) {
+        installedVer = (await readToolVersion(installedYtPath, ['--version'])).trim()
+      }
+
+      if (!installedVer || bundledVer > installedVer) {
+        ensureDir(BIN_DIR)
+        fs.copyFileSync(bundledYtPath, installedYtPath)
+        if (!isWin) {
+          try { fs.chmodSync(installedYtPath, '755') } catch {}
+        }
+        console.log(`[yt-dlp] 已从安装包更新: ${installedVer || '无'} → ${bundledVer}`)
+      }
+    }
+  } catch (e) {
+    console.warn('[yt-dlp] 版本检查/更新失败:', e.message)
+  }
+
   // 清理 ttmpdownload 中超过1天的已下载文件
   try {
     if (fs.existsSync(DOWNLOAD_DIR)) {
@@ -1903,40 +2003,40 @@ app.whenReady().then(async () => {
   // 从旧 Roaming 路径迁移数据到新的安装路径
   if (OLD_USER_DATA) {
     try {
-    const OLD_BASE = OLD_USER_DATA
-    const OLD_BIN = path.join(OLD_BASE, 'bin')
-    const OLD_TEMP = path.join(OLD_BASE, 'temp')
-    const OLD_CACHE = path.join(OLD_BASE, 'cache')
+      const OLD_BASE = OLD_USER_DATA
+      const OLD_BIN = path.join(OLD_BASE, 'bin')
+      const OLD_CACHE = path.join(OLD_BASE, 'cache')
 
-    // 迁移 bin (yt-dlp)
-    if (fs.existsSync(OLD_BIN)) {
-      const binFiles = fs.readdirSync(OLD_BIN)
-      for (const f of binFiles) {
-        const src = path.join(OLD_BIN, f)
-        const dst = path.join(BIN_DIR, f)
-        if (fs.statSync(src).isFile() && !fs.existsSync(dst)) {
-          ensureDir(BIN_DIR)
-          fs.copyFileSync(src, dst)
-          if (!isWin) try { fs.chmodSync(dst, '755') } catch {}
-          console.log('[migrate] yt-dlp 已迁移到:', dst)
+      if (fs.existsSync(OLD_BIN)) {
+        const binFiles = fs.readdirSync(OLD_BIN)
+        for (const f of binFiles) {
+          const src = path.join(OLD_BIN, f)
+          const dst = path.join(BIN_DIR, f)
+          if (fs.statSync(src).isFile() && !fs.existsSync(dst)) {
+            ensureDir(BIN_DIR)
+            fs.copyFileSync(src, dst)
+            if (!isWin) {
+              try { fs.chmodSync(dst, '755') } catch {}
+            }
+            console.log('[migrate] yt-dlp 已迁移到:', dst)
+          }
         }
       }
-    }
-    // 迁移 cache
-    if (fs.existsSync(OLD_CACHE)) {
-      const cacheFiles = fs.readdirSync(OLD_CACHE)
-      for (const f of cacheFiles) {
-        const src = path.join(OLD_CACHE, f)
-        const dst = path.join(CACHE_DIR, f)
-        if (fs.statSync(src).isFile() && !fs.existsSync(dst)) {
-          ensureDir(CACHE_DIR)
-          fs.copyFileSync(src, dst)
+
+      if (fs.existsSync(OLD_CACHE)) {
+        const cacheFiles = fs.readdirSync(OLD_CACHE)
+        for (const f of cacheFiles) {
+          const src = path.join(OLD_CACHE, f)
+          const dst = path.join(CACHE_DIR, f)
+          if (fs.statSync(src).isFile() && !fs.existsSync(dst)) {
+            ensureDir(CACHE_DIR)
+            fs.copyFileSync(src, dst)
+          }
         }
       }
+    } catch (migrateErr) {
+      console.warn('[migrate] 数据迁移跳过（首次运行或旧目录不存在）:', migrateErr.message)
     }
-  } catch (migrateErr) {
-    console.warn('[migrate] 数据迁移跳过（首次运行或旧目录不存在）:', migrateErr.message)
-  }
   }
 
   createWindow()

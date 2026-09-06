@@ -23,10 +23,10 @@ export default function BilibiliDownloader({ onDownload, onCancel, networkOk }) 
       return trimmed
     }
 
-    // B站视频链接 - 提取BV号（支持带 query 参数，如 ?share_source=...）
+    // B站视频链接 - 保留完整链接，让 yt-dlp 使用原始页面上下文。
     const bvMatch = trimmed.match(/bilibili\.com\/video\/(BV[a-zA-Z0-9]+)/i)
     if (bvMatch) {
-      return bvMatch[1]
+      return trimmed.match(/^https?:\/\//i) ? trimmed : `https://${trimmed}`
     }
 
     // b23.tv 短链接 - 提取完整 URL（支持中文前缀，如 【标题】 https://b23.tv/xxx）

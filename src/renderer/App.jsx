@@ -297,7 +297,7 @@ export default function App() {
 
     if (checkResult && checkResult.available) {
       const ver = checkResult.version ? ` (${checkResult.version})` : ''
-      setLoadingStatus(`已检测到 yt-dlp${ver}，正在检查更新...`)
+      setLoadingStatus(`已检测到 yt-dlp${ver}，正在检查并执行更新...`)
     } else {
       setLoadingStatus('未检测到 yt-dlp，正在下载核心组件...')
     }
